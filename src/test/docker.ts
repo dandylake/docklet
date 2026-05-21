@@ -89,6 +89,35 @@ export interface FakeStatsStream extends Readable {
   destroyCalls: number;
 }
 
+/** Map stored PortBindings into the `Ports` shape `listContainers` exposes. */
+function toPortList(c: FakeContainer) {
+  const bindings = c.opts.HostConfig?.PortBindings ?? {};
+  return Object.entries(bindings).flatMap(([key, hostBindings]) => {
+    const [portStr, proto] = key.split("/");
+    const privatePort = parseInt(portStr, 10);
+    return (hostBindings ?? []).map((hb) => ({
+      PrivatePort: privatePort,
+      PublicPort: hb.HostPort ? parseInt(hb.HostPort, 10) : undefined,
+      Type: proto || "tcp",
+      IP: hb.HostIp,
+    }));
+  });
+}
+
+/** Map stored Binds ("src:dest:mode") into the `Mounts` shape `inspect` exposes. */
+function toMountList(c: FakeContainer) {
+  const binds = c.opts.HostConfig?.Binds ?? [];
+  return binds.map((bind) => {
+    const [source, destination, mode] = bind.split(":");
+    return {
+      Source: source ?? "",
+      Destination: destination ?? "",
+      Mode: mode ?? "",
+      RW: mode !== "ro",
+    };
+  });
+}
+
 export class FakeDocker {
   private containers = new Map<string, FakeContainer>();
   private images = new Map<string, FakeImage>();
@@ -132,7 +161,7 @@ export class FakeDocker {
         Image: c.image,
         State: c.state,
         Status: c.state,
-        Ports: [],
+        Ports: toPortList(c),
         Created: c.created,
       }));
   }
@@ -202,7 +231,7 @@ export class FakeDocker {
             NanoCpus: hostConfig.NanoCpus ?? 0,
             Memory: hostConfig.Memory ?? 0,
           },
-          Mounts: [],
+          Mounts: toMountList(c),
         };
       },
       logs: async () => Readable.from([]),

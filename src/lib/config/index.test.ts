@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, onTestFinished } from "vitest";
 import { createDbInstance } from "@/lib/db";
 import { users } from "@/lib/db/schema";
 import { useTestDb } from "@/test/db";
@@ -88,9 +88,18 @@ describe("config", () => {
 
   describe("ensureJwtSecret", () => {
     // These tests need a DB without a seeded secret, so they build a raw
-    // in-memory instance rather than the secret-seeded createTestDb().
-    it("when no secret exists — generates a secret longer than 32 characters", () => {
+    // in-memory instance rather than the secret-seeded createTestDb(). The
+    // connection is closed when the test finishes so it does not leak.
+    function rawDb() {
       const db = createDbInstance(":memory:");
+      onTestFinished(() => {
+        db.$client.close();
+      });
+      return db;
+    }
+
+    it("when no secret exists — generates a secret longer than 32 characters", () => {
+      const db = rawDb();
       ensureJwtSecret(db);
       const secret = getSetting("jwt_secret", db);
       expect(secret).not.toBeNull();
@@ -98,7 +107,7 @@ describe("config", () => {
     });
 
     it("when a secret already exists — leaves it unchanged", () => {
-      const db = createDbInstance(":memory:");
+      const db = rawDb();
       setSetting("jwt_secret", "preexisting-secret", db);
       ensureJwtSecret(db);
       expect(getSetting("jwt_secret", db)).toBe("preexisting-secret");

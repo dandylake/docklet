@@ -3,7 +3,7 @@ import { cookies } from "next/headers";
 import { getSetting } from "@/lib/config";
 import type { User } from "@/lib/db/schema";
 
-const COOKIE_NAME = "docklet_session";
+export const COOKIE_NAME = "docklet_session";
 const EXPIRY_HOURS = 72;
 
 async function getJwtSecret(): Promise<Uint8Array> {

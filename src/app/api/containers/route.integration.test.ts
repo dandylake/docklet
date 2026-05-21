@@ -39,6 +39,28 @@ describe("/api/containers (collection)", () => {
       expect(res.body[0]).toMatchObject({ name: "web", state: "running" });
     });
 
+    it("when a container publishes ports, the list includes its port bindings", async () => {
+      await loginAs(ctx.get(), { role: "admin" });
+      const fake = getFakeDocker();
+      const c = await fake.createContainer({
+        name: "web",
+        Image: "nginx",
+        HostConfig: {
+          PortBindings: { "80/tcp": [{ HostPort: "8080", HostIp: "0.0.0.0" }] },
+        },
+      });
+      await c.start();
+
+      const res = await callHandler<
+        Array<{ ports: Array<Record<string, unknown>> }>
+      >(GET, buildRequest());
+
+      expect(res.status).toBe(200);
+      expect(res.body[0].ports).toEqual([
+        { containerPort: 80, hostPort: 8080, protocol: "tcp", hostIp: "0.0.0.0" },
+      ]);
+    });
+
     it("when not logged in, returns 401", async () => {
       const res = await callHandler(
         GET,

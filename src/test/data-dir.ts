@@ -16,15 +16,21 @@ import { tmpdir } from "os";
  */
 export function useTempDataDir(): { get: () => string } {
   let dir: string;
+  let prev: string | undefined;
 
   beforeAll(() => {
+    prev = process.env.DOCKLET_DATA_DIR;
     dir = mkdtempSync(join(tmpdir(), "docklet-test-"));
     process.env.DOCKLET_DATA_DIR = dir;
   });
 
   afterAll(() => {
     rmSync(dir, { recursive: true, force: true });
-    delete process.env.DOCKLET_DATA_DIR;
+    if (prev === undefined) {
+      delete process.env.DOCKLET_DATA_DIR;
+    } else {
+      process.env.DOCKLET_DATA_DIR = prev;
+    }
   });
 
   return { get: () => dir };

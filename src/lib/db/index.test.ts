@@ -1,32 +1,25 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { mkdtempSync, rmSync, existsSync } from "fs";
+import { describe, it, expect, beforeAll } from "vitest";
+import { existsSync } from "fs";
 import { join } from "path";
-import { tmpdir } from "os";
+import { useTempDataDir } from "@/test/data-dir";
 
 describe("initDataDirs", () => {
-  let tmpDir: string;
+  const dataDir = useTempDataDir();
+  let initDataDirs: typeof import("./index").initDataDirs;
 
   beforeAll(async () => {
-    tmpDir = mkdtempSync(join(tmpdir(), "docklet-test-"));
-    process.env.DOCKLET_DATA_DIR = tmpDir;
-    const { initDataDirs } = await import("./index");
+    ({ initDataDirs } = await import("./index"));
+  });
+
+  it("creates the db, certs, and backups subdirectories", () => {
     initDataDirs();
+    for (const sub of ["db", "certs", "backups"]) {
+      expect(existsSync(join(dataDir.get(), sub))).toBe(true);
+    }
   });
 
-  afterAll(() => {
-    rmSync(tmpDir, { recursive: true, force: true });
-    delete process.env.DOCKLET_DATA_DIR;
-  });
-
-  it("creates the db/ subdirectory", () => {
-    expect(existsSync(join(tmpDir, "db"))).toBe(true);
-  });
-
-  it("creates the certs/ subdirectory", () => {
-    expect(existsSync(join(tmpDir, "certs"))).toBe(true);
-  });
-
-  it("creates the backups/ subdirectory", () => {
-    expect(existsSync(join(tmpDir, "backups"))).toBe(true);
+  it("when called again on an existing data dir — is idempotent and does not throw", () => {
+    initDataDirs();
+    expect(() => initDataDirs()).not.toThrow();
   });
 });

@@ -1,41 +1,42 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { mkdirSync, rmSync } from "fs";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
+import { X509Certificate, createPrivateKey } from "crypto";
 
 vi.mock("@/lib/config", () => ({
   setSetting: vi.fn(),
 }));
 
+import { setSetting } from "@/lib/config";
+import { ensureSelfSignedCert } from "./generate";
+
 describe("ensureSelfSignedCert", () => {
   let certsDir: string;
 
   beforeEach(() => {
-    certsDir = join(tmpdir(), `docklet-certs-test-${Date.now()}`);
-    mkdirSync(certsDir, { recursive: true });
+    certsDir = mkdtempSync(join(tmpdir(), "docklet-certs-test-"));
     vi.clearAllMocks();
   });
 
-  it("when neither cert nor key exists — generates both and calls setSetting", async () => {
-    const { existsSync } = await import("fs");
-    const { setSetting } = await import("@/lib/config");
-    const { ensureSelfSignedCert } = await import("./generate");
-
-    await ensureSelfSignedCert(certsDir);
-
-    expect(existsSync(join(certsDir, "cert.pem"))).toBe(true);
-    expect(existsSync(join(certsDir, "key.pem"))).toBe(true);
-    expect(setSetting).toHaveBeenCalledWith("tls_cert_type", "self-signed");
-    expect(setSetting).toHaveBeenCalledWith("tls_enabled", "true");
-
-    rmSync(certsDir, { recursive: true });
+  afterEach(() => {
+    rmSync(certsDir, { recursive: true, force: true });
   });
 
-  it("when both cert and key already exist — is a no-op", async () => {
-    const { writeFileSync, readFileSync } = await import("fs");
-    const { setSetting } = await import("@/lib/config");
-    const { ensureSelfSignedCert } = await import("./generate");
+  it("when neither cert nor key exists — generates a valid pair and records TLS settings", async () => {
+    await ensureSelfSignedCert(certsDir);
 
+    const cert = new X509Certificate(readFileSync(join(certsDir, "cert.pem")));
+    expect(cert.subject).toContain("docklet");
+    expect(() =>
+      createPrivateKey(readFileSync(join(certsDir, "key.pem")))
+    ).not.toThrow();
+
+    expect(setSetting).toHaveBeenCalledWith("tls_cert_type", "self-signed");
+    expect(setSetting).toHaveBeenCalledWith("tls_enabled", "true");
+  });
+
+  it("when both cert and key already exist — leaves them untouched", async () => {
     const certPath = join(certsDir, "cert.pem");
     const keyPath = join(certsDir, "key.pem");
     writeFileSync(certPath, "existing-cert");
@@ -46,20 +47,17 @@ describe("ensureSelfSignedCert", () => {
     expect(readFileSync(certPath, "utf8")).toBe("existing-cert");
     expect(readFileSync(keyPath, "utf8")).toBe("existing-key");
     expect(setSetting).not.toHaveBeenCalled();
-
-    rmSync(certsDir, { recursive: true });
   });
 
-  it("when only key is missing — regenerates the certificate", async () => {
-    const { writeFileSync, existsSync } = await import("fs");
-    const { ensureSelfSignedCert } = await import("./generate");
-
-    writeFileSync(join(certsDir, "cert.pem"), "existing-cert");
+  it("when the key is missing — regenerates both the cert and the key", async () => {
+    const certPath = join(certsDir, "cert.pem");
+    writeFileSync(certPath, "stale-cert");
 
     await ensureSelfSignedCert(certsDir);
 
     expect(existsSync(join(certsDir, "key.pem"))).toBe(true);
-
-    rmSync(certsDir, { recursive: true });
+    const regenerated = readFileSync(certPath, "utf8");
+    expect(regenerated).not.toBe("stale-cert");
+    expect(() => new X509Certificate(regenerated)).not.toThrow();
   });
 });

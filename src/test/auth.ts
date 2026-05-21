@@ -1,11 +1,9 @@
 import { createUser, type Role } from "@/lib/users/service";
-import { createSession } from "@/lib/auth/session";
+import { createSession, COOKIE_NAME } from "@/lib/auth/session";
 import { eq } from "drizzle-orm";
 import { users } from "@/lib/db/schema";
 import type { Db } from "@/lib/db";
 import { username, password } from "./faker";
-
-const SESSION_COOKIE = "docklet_session";
 
 export interface TestUser {
   id: number;
@@ -40,9 +38,9 @@ export async function setSessionCookieFor(db: Db, userId: number): Promise<void>
   const row = db.select().from(users).where(eq(users.id, userId)).get();
   if (!row) throw new Error(`User ${userId} not found`);
   const token = await createSession(row);
-  globalThis.__testCookieJar.set(SESSION_COOKIE, token);
+  globalThis.__testCookieJar.set(COOKIE_NAME, token);
 }
 
 export function clearSession(): void {
-  globalThis.__testCookieJar.delete(SESSION_COOKIE);
+  globalThis.__testCookieJar.delete(COOKIE_NAME);
 }

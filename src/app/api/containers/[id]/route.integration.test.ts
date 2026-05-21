@@ -44,6 +44,26 @@ describe("/api/containers/[id]", () => {
       expect(res.status).toBe(200);
       expect(res.body).toMatchObject({ name: "web", image: "nginx" });
     });
+
+    it("when the container has bind mounts, returns them in inspect info", async () => {
+      await loginAs(ctx.get(), { role: "admin" });
+      const c = await getFakeDocker().createContainer({
+        name: "with-vol",
+        Image: "nginx",
+        HostConfig: { Binds: ["/srv/data:/data:rw"] },
+      });
+
+      const res = await callHandler<{ mounts: Array<Record<string, unknown>> }>(
+        GET,
+        buildRequest(),
+        params(c.id)
+      );
+
+      expect(res.status).toBe(200);
+      expect(res.body.mounts).toEqual([
+        { source: "/srv/data", destination: "/data", mode: "rw", rw: true },
+      ]);
+    });
   });
 
   describe("DELETE", () => {

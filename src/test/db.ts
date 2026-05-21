@@ -20,6 +20,7 @@ export function useTestDb(): { get: () => Db } {
   });
 
   afterEach(() => {
+    db.$client.close(); // better-sqlite3 close() is idempotent
     resetDb();
   });
 

@@ -146,7 +146,7 @@ npm run test:integration  # integration tests only
 npm run test:watch        # watch mode
 ```
 
-**E2E tests** (Playwright) exercise genuine multi-page user journeys in a real browser against a running dev server. Kept intentionally small (~17 tests) — anything coverable at the integration layer lives there instead.
+**E2E tests** (Playwright) exercise genuine multi-page user journeys in a real browser against a running dev server. Kept intentionally small — anything coverable at the integration layer lives there instead.
 
 ```bash
 npx playwright install chromium   # first time only

@@ -1,162 +1,142 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, existsSync } from "fs";
+import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
+import { rmSync, writeFileSync, mkdirSync, existsSync } from "fs";
 import { readFile } from "fs/promises";
 import { join } from "path";
-import { tmpdir } from "os";
+import { fileTypeFromBuffer } from "file-type";
+import { useTempDataDir } from "@/test/data-dir";
 
 vi.mock("file-type", () => ({
   fileTypeFromBuffer: vi.fn(async () => undefined),
 }));
 
 describe("files/service", () => {
-  let tmpDir: string;
+  const dataDir = useTempDataDir();
+  let service: typeof import("./service");
   let volumesDir: string;
 
-  beforeAll(() => {
-    tmpDir = mkdtempSync(join(tmpdir(), "docklet-fs-test-"));
-    process.env.DOCKLET_DATA_DIR = tmpDir;
-    volumesDir = join(tmpDir, "volumes");
-    mkdirSync(volumesDir, { recursive: true });
+  beforeAll(async () => {
+    service = await import("./service");
+    volumesDir = join(dataDir.get(), "volumes");
   });
 
-  afterAll(() => {
-    rmSync(tmpDir, { recursive: true, force: true });
-    delete process.env.DOCKLET_DATA_DIR;
-  });
-
-  beforeEach(async () => {
+  beforeEach(() => {
     rmSync(volumesDir, { recursive: true, force: true });
     mkdirSync(volumesDir, { recursive: true });
-    const { fileTypeFromBuffer } = await import("file-type");
     vi.mocked(fileTypeFromBuffer).mockReset().mockResolvedValue(undefined);
   });
 
   describe("listDir", () => {
-    it("when directory has both dirs and files — returns dirs first then files, alpha sorted", async () => {
+    it("when a directory has both dirs and files — returns dirs first, each group alpha sorted", async () => {
       mkdirSync(join(volumesDir, "zeta"));
       mkdirSync(join(volumesDir, "alpha"));
       writeFileSync(join(volumesDir, "b.txt"), "b");
       writeFileSync(join(volumesDir, "a.txt"), "a");
 
-      const { listDir } = await import("./service");
-      const entries = await listDir("");
+      const entries = await service.listDir("");
       expect(entries.map((e) => e.name)).toEqual(["alpha", "zeta", "a.txt", "b.txt"]);
       expect(entries[0].isDir).toBe(true);
       expect(entries[2].isDir).toBe(false);
     });
 
-    it("when path contains traversal — rejects with 400", async () => {
-      const { listDir } = await import("./service");
-      await expect(listDir("../..")).rejects.toMatchObject({ status: 400 });
+    it("when the path contains traversal — rejects with 400", async () => {
+      await expect(service.listDir("../..")).rejects.toMatchObject({ status: 400 });
     });
 
-    it("when file has no binary signature — entry has isText true", async () => {
+    it("when a file has no binary signature — its entry has isText true", async () => {
       writeFileSync(join(volumesDir, "notes.txt"), "hello world");
 
-      const { listDir } = await import("./service");
-      const entries = await listDir("");
-
-      expect(entries).toEqual(expect.arrayContaining([
-        expect.objectContaining({ name: "notes.txt", isText: true }),
-      ]));
+      const entries = await service.listDir("");
+      expect(entries).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ name: "notes.txt", isText: true }),
+        ])
+      );
     });
 
-    it("when fileTypeFromBuffer detects binary mime — entry has isText false", async () => {
-      const { fileTypeFromBuffer } = await import("file-type");
+    it("when fileTypeFromBuffer detects a binary mime — its entry has isText false", async () => {
       vi.mocked(fileTypeFromBuffer).mockResolvedValue({ mime: "image/png", ext: "png" });
       writeFileSync(join(volumesDir, "img.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
 
-      const { listDir } = await import("./service");
-      const entries = await listDir("");
-
-      expect(entries).toEqual(expect.arrayContaining([
-        expect.objectContaining({ name: "img.png", isText: false }),
-      ]));
+      const entries = await service.listDir("");
+      expect(entries).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ name: "img.png", isText: false }),
+        ])
+      );
     });
 
-    it("when entry is a directory — isText is false regardless of content", async () => {
+    it("when an entry is a directory — isText is false regardless of content", async () => {
       mkdirSync(join(volumesDir, "subdir"));
 
-      const { listDir } = await import("./service");
-      const entries = await listDir("");
-
-      expect(entries).toEqual(expect.arrayContaining([
-        expect.objectContaining({ name: "subdir", isDir: true, isText: false }),
-      ]));
+      const entries = await service.listDir("");
+      expect(entries).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ name: "subdir", isDir: true, isText: false }),
+        ])
+      );
     });
 
-    it("when file is empty — entry has isText true", async () => {
+    it("when a file is empty — its entry has isText true", async () => {
       writeFileSync(join(volumesDir, "empty.txt"), "");
 
-      const { listDir } = await import("./service");
-      const entries = await listDir("");
-
-      expect(entries).toEqual(expect.arrayContaining([
-        expect.objectContaining({ name: "empty.txt", isText: true }),
-      ]));
+      const entries = await service.listDir("");
+      expect(entries).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ name: "empty.txt", isText: true }),
+        ])
+      );
     });
   });
 
   describe("writeTextFile + readTextFile", () => {
-    it("round-trip preserves content and encoding", async () => {
-      const { writeTextFile, readTextFile } = await import("./service");
-      await writeTextFile("hello.txt", "world\n");
-      const { content, encoding } = await readTextFile("hello.txt");
+    it("round-trips content and reports the encoding", async () => {
+      await service.writeTextFile("hello.txt", "world\n");
+      const { content, encoding } = await service.readTextFile("hello.txt");
       expect(content).toBe("world\n");
       expect(encoding).toBe("utf-8");
     });
 
     it("writeTextFile creates intermediate directories", async () => {
-      const { writeTextFile } = await import("./service");
-      await writeTextFile("a/b/c.txt", "nested");
+      await service.writeTextFile("a/b/c.txt", "nested");
       const buf = await readFile(join(volumesDir, "a", "b", "c.txt"), "utf-8");
       expect(buf).toBe("nested");
     });
 
-    it("readTextFile — when file has binary mime type — rejects with 415", async () => {
-      const { fileTypeFromBuffer } = await import("file-type");
+    it("when readTextFile hits a binary mime type — rejects with 415", async () => {
       vi.mocked(fileTypeFromBuffer).mockResolvedValue({ mime: "image/png", ext: "png" });
       writeFileSync(join(volumesDir, "img.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
-      const { readTextFile } = await import("./service");
-      await expect(readTextFile("img.png")).rejects.toMatchObject({ status: 415 });
+      await expect(service.readTextFile("img.png")).rejects.toMatchObject({ status: 415 });
     });
 
-    it("readTextFile — when file has explicit text mime type — returns content", async () => {
-      const { fileTypeFromBuffer } = await import("file-type");
+    it("when readTextFile hits an explicit text mime type — returns the content", async () => {
       vi.mocked(fileTypeFromBuffer).mockResolvedValue({ mime: "application/json", ext: "json" });
       writeFileSync(join(volumesDir, "data.json"), '{"ok":true}');
-      const { readTextFile } = await import("./service");
-      const { content } = await readTextFile("data.json");
+      const { content } = await service.readTextFile("data.json");
       expect(content).toBe('{"ok":true}');
     });
 
-    it("readTextFile — when file does not exist — rejects with 404", async () => {
-      const { readTextFile } = await import("./service");
-
-      await expect(readTextFile("ghost.txt")).rejects.toMatchObject({ status: 404 });
+    it("when readTextFile targets a missing file — rejects with 404", async () => {
+      await expect(service.readTextFile("ghost.txt")).rejects.toMatchObject({ status: 404 });
     });
 
-    it("readTextFile — when file exceeds max bytes — rejects with 413", async () => {
+    it("when readTextFile targets a file over the byte limit — rejects with 413", async () => {
       writeFileSync(join(volumesDir, "big.txt"), "x".repeat(1000));
-      const { readTextFile } = await import("./service");
-      await expect(readTextFile("big.txt", 100)).rejects.toMatchObject({ status: 413 });
+      await expect(service.readTextFile("big.txt", 100)).rejects.toMatchObject({ status: 413 });
     });
   });
 
   describe("mkdir", () => {
-    it("creates directory and returns a dir entry", async () => {
-      const { mkdir } = await import("./service");
-      const entry = await mkdir("new-dir");
+    it("creates the directory and returns a dir entry", async () => {
+      const entry = await service.mkdir("new-dir");
       expect(entry.isDir).toBe(true);
       expect(existsSync(join(volumesDir, "new-dir"))).toBe(true);
     });
   });
 
   describe("rename", () => {
-    it("moves file to new path", async () => {
+    it("moves a file to the new path", async () => {
       writeFileSync(join(volumesDir, "old.txt"), "data");
-      const { rename } = await import("./service");
-      const entry = await rename("old.txt", "sub/new.txt");
+      const entry = await service.rename("old.txt", "sub/new.txt");
       expect(entry.path).toBe("sub/new.txt");
       expect(existsSync(join(volumesDir, "old.txt"))).toBe(false);
       expect(existsSync(join(volumesDir, "sub", "new.txt"))).toBe(true);
@@ -167,25 +147,21 @@ describe("files/service", () => {
     it("recursively deletes a directory", async () => {
       mkdirSync(join(volumesDir, "trash", "inner"), { recursive: true });
       writeFileSync(join(volumesDir, "trash", "inner", "a"), "a");
-      const { remove } = await import("./service");
-      await remove("trash");
+      await service.remove("trash");
       expect(existsSync(join(volumesDir, "trash"))).toBe(false);
     });
 
-    it("when path is empty string — rejects with 400", async () => {
-      const { remove } = await import("./service");
-      await expect(remove("")).rejects.toMatchObject({ status: 400 });
+    it("when the path is an empty string — rejects with 400", async () => {
+      await expect(service.remove("")).rejects.toMatchObject({ status: 400 });
     });
 
-    it("when path is '.' — rejects with 400", async () => {
-      const { remove } = await import("./service");
-      await expect(remove(".")).rejects.toMatchObject({ status: 400 });
+    it("when the path is a dot — rejects with 400", async () => {
+      await expect(service.remove(".")).rejects.toMatchObject({ status: 400 });
     });
   });
 
   describe("saveUploadStream", () => {
-    it("when stream exceeds byte limit — rejects with 413 and removes partial file", async () => {
-      const { saveUploadStream } = await import("./service");
+    it("when the stream exceeds the byte limit — rejects with 413 and removes the partial file", async () => {
       const body = new ReadableStream<Uint8Array>({
         start(controller) {
           controller.enqueue(new Uint8Array(100));
@@ -194,13 +170,12 @@ describe("files/service", () => {
         },
       });
       await expect(
-        saveUploadStream("", "upload.bin", body, 150)
+        service.saveUploadStream("", "upload.bin", body, 150)
       ).rejects.toMatchObject({ status: 413 });
       expect(existsSync(join(volumesDir, "upload.bin"))).toBe(false);
     });
 
-    it("when stream is within limit — writes file with correct size", async () => {
-      const { saveUploadStream } = await import("./service");
+    it("when the stream is within the limit — writes the file with the correct size", async () => {
       const payload = new Uint8Array(50).fill(0x41);
       const body = new ReadableStream<Uint8Array>({
         start(controller) {
@@ -208,13 +183,12 @@ describe("files/service", () => {
           controller.close();
         },
       });
-      const entry = await saveUploadStream("", "ok.txt", body, 1024);
+      const entry = await service.saveUploadStream("", "ok.txt", body, 1024);
       expect(entry.size).toBe(50);
       expect(existsSync(join(volumesDir, "ok.txt"))).toBe(true);
     });
 
-    it("when filename contains path traversal — rejects with 400", async () => {
-      const { saveUploadStream } = await import("./service");
+    it("when the filename contains path traversal — rejects with 400", async () => {
       const body = new ReadableStream<Uint8Array>({
         start(controller) {
           controller.enqueue(new Uint8Array([0x41]));
@@ -222,7 +196,7 @@ describe("files/service", () => {
         },
       });
       await expect(
-        saveUploadStream("", "../evil.txt", body)
+        service.saveUploadStream("", "../evil.txt", body)
       ).rejects.toMatchObject({ status: 400 });
     });
   });

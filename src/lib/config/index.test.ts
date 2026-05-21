@@ -1,91 +1,107 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { faker } from "@faker-js/faker";
-import { mkdtempSync, rmSync } from "fs";
-import { join } from "path";
-import { tmpdir } from "os";
+import { describe, it, expect } from "vitest";
+import { createDbInstance } from "@/lib/db";
+import { users } from "@/lib/db/schema";
+import { useTestDb } from "@/test/db";
+import {
+  getSetting,
+  setSetting,
+  getAllSettings,
+  isSetupCompleted,
+  ensureJwtSecret,
+} from "./index";
 
 describe("config", () => {
-  let tmpDir: string;
-
-  beforeAll(async () => {
-    tmpDir = mkdtempSync(join(tmpdir(), "docklet-config-test-"));
-    process.env.DOCKLET_DATA_DIR = tmpDir;
-
-    const db = await import("@/lib/db");
-    db.initDataDirs();
-    db.runMigrations();
-  });
-
-  afterAll(() => {
-    rmSync(tmpDir, { recursive: true, force: true });
-    delete process.env.DOCKLET_DATA_DIR;
-  });
+  const ctx = useTestDb();
 
   describe("getSetting", () => {
-    it("when key does not exist — returns null", async () => {
-      const { getSetting } = await import("@/lib/config");
-      expect(getSetting(faker.word.noun())).toBeNull();
+    it("when the key does not exist — returns null", () => {
+      expect(getSetting("missing", ctx.get())).toBeNull();
+    });
+
+    it("when the key exists — returns its stored value", () => {
+      setSetting("app_name", "Docklet", ctx.get());
+      expect(getSetting("app_name", ctx.get())).toBe("Docklet");
     });
   });
 
   describe("setSetting", () => {
-    it("when setting a new key — value is retrievable", async () => {
-      const { getSetting, setSetting } = await import("@/lib/config");
-      const key = `test_set_${faker.string.alphanumeric(6)}`;
-      const value = faker.word.sample();
-      setSetting(key, value);
-      expect(getSetting(key)).toBe(value);
+    it("when setting a new key — the value becomes retrievable", () => {
+      setSetting("theme", "dark", ctx.get());
+      expect(getSetting("theme", ctx.get())).toBe("dark");
     });
 
-    it("when overwriting an existing key — returns updated value", async () => {
-      const { getSetting, setSetting } = await import("@/lib/config");
-      const key = `test_overwrite_${faker.string.alphanumeric(6)}`;
-      setSetting(key, "first");
-      const newValue = faker.word.sample();
-      setSetting(key, newValue);
-      expect(getSetting(key)).toBe(newValue);
+    it("when overwriting an existing key — stores the latest value", () => {
+      setSetting("theme", "dark", ctx.get());
+      setSetting("theme", "light", ctx.get());
+      expect(getSetting("theme", ctx.get())).toBe("light");
+    });
+  });
+
+  describe("getAllSettings", () => {
+    it("returns every stored key as a key/value map", () => {
+      setSetting("app_name", "Docklet", ctx.get());
+      setSetting("theme", "dark", ctx.get());
+      expect(getAllSettings(ctx.get())).toMatchObject({
+        app_name: "Docklet",
+        theme: "dark",
+      });
     });
   });
 
   describe("isSetupCompleted", () => {
-    it("when no admin user exists — returns false", async () => {
-      const { isSetupCompleted } = await import("@/lib/config");
-      expect(isSetupCompleted()).toBe(false);
+    it("when no users exist — returns false", () => {
+      expect(isSetupCompleted(ctx.get())).toBe(false);
     });
 
-    it("when an admin user exists — returns true", async () => {
-      const { isSetupCompleted } = await import("@/lib/config");
-      const { getDb } = await import("@/lib/db");
-      const { users } = await import("@/lib/db/schema");
-
-      const db = getDb();
+    it("when only a non-admin user exists — returns false", () => {
       const now = new Date();
-      db.insert(users).values({
-        username: "admin",
-        passwordHash: "hash",
-        role: "admin",
-        createdAt: now,
-        updatedAt: now,
-      }).run();
+      ctx
+        .get()
+        .insert(users)
+        .values({
+          username: "bob",
+          passwordHash: "hash",
+          role: "user",
+          createdAt: now,
+          updatedAt: now,
+        })
+        .run();
+      expect(isSetupCompleted(ctx.get())).toBe(false);
+    });
 
-      expect(isSetupCompleted()).toBe(true);
+    it("when an admin user exists — returns true", () => {
+      const now = new Date();
+      ctx
+        .get()
+        .insert(users)
+        .values({
+          username: "admin",
+          passwordHash: "hash",
+          role: "admin",
+          createdAt: now,
+          updatedAt: now,
+        })
+        .run();
+      expect(isSetupCompleted(ctx.get())).toBe(true);
     });
   });
 
   describe("ensureJwtSecret", () => {
-    it("when no secret exists — generates one longer than 32 chars", async () => {
-      const { ensureJwtSecret, getSetting } = await import("@/lib/config");
-      ensureJwtSecret();
-      const secret = getSetting("jwt_secret");
-      expect(secret).toBeTruthy();
+    // These tests need a DB without a seeded secret, so they build a raw
+    // in-memory instance rather than the secret-seeded createTestDb().
+    it("when no secret exists — generates a secret longer than 32 characters", () => {
+      const db = createDbInstance(":memory:");
+      ensureJwtSecret(db);
+      const secret = getSetting("jwt_secret", db);
+      expect(secret).not.toBeNull();
       expect(secret!.length).toBeGreaterThan(32);
     });
 
-    it("when a secret already exists — does not overwrite it", async () => {
-      const { ensureJwtSecret, getSetting } = await import("@/lib/config");
-      const existing = getSetting("jwt_secret");
-      ensureJwtSecret();
-      expect(getSetting("jwt_secret")).toBe(existing);
+    it("when a secret already exists — leaves it unchanged", () => {
+      const db = createDbInstance(":memory:");
+      setSetting("jwt_secret", "preexisting-secret", db);
+      ensureJwtSecret(db);
+      expect(getSetting("jwt_secret", db)).toBe("preexisting-secret");
     });
   });
 });

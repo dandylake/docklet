@@ -35,6 +35,14 @@ test.describe("Login", () => {
     await login.login(ADMIN_CREDS.username, ADMIN_CREDS.password);
     await expect(page).toHaveURL(/\/containers/);
   });
+
+  test("rejects invalid credentials with an inline error", async ({ page }) => {
+    const login = new LoginPage(page);
+    await login.goto();
+    await login.login(ADMIN_CREDS.username, "wrong-password-xyz");
+    await expect(login.errorMessage).toContainText(/invalid/i);
+    await expect(page).toHaveURL(/\/login/);
+  });
 });
 
 test.describe("Logout", () => {

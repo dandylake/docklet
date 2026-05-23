@@ -26,8 +26,4 @@ export class SettingsPage {
     await this.saveButton.click();
     await this.successMessage.waitFor({ state: "visible" });
   }
-
-  async getAppName(): Promise<string> {
-    return this.appNameInput.inputValue();
-  }
 }

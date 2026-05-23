@@ -14,92 +14,37 @@ export const MOD_CREDS = {
   password: "e2epassword3",
 } as const;
 
+type Creds = { username: string; password: string };
+
 type AuthFixtures = {
   adminPage: Page;
   userPage: Page;
   modPage: Page;
+  adminRequest: APIRequestContext;
 };
 
-function normalizeSameSite(value: string | undefined): "Lax" | "Strict" | "None" {
-  if (!value) return "Lax";
-  const capitalized = value.charAt(0).toUpperCase() + value.slice(1).toLowerCase();
-  if (capitalized === "Strict" || capitalized === "None") return capitalized;
-  return "Lax";
-}
-
 /**
- * Parses a Set-Cookie header string into Playwright cookie objects.
- * Handles the httpOnly docklet_session cookie that can't be set via document.cookie.
+ * Logs in via the API. Playwright stores the response's Set-Cookie in the
+ * cookie jar of whichever context issued the request: page.request feeds the
+ * browser context, a standalone APIRequestContext feeds itself. Either way the
+ * caller is authenticated afterwards with no manual cookie handling.
  */
-function parseSetCookieHeader(
-  setCookieHeader: string,
-  domain: string
-): Array<{
-  name: string;
-  value: string;
-  domain: string;
-  path: string;
-  httpOnly: boolean;
-  secure: boolean;
-  sameSite: "Lax" | "Strict" | "None";
-}> {
-  return setCookieHeader.split(/,(?=[^ ])/).map((raw) => {
-    const parts = raw.split(";").map((p) => p.trim());
-    const [nameValue, ...attrParts] = parts;
-    const eqIdx = nameValue.indexOf("=");
-    const name = nameValue.slice(0, eqIdx).trim();
-    const value = nameValue.slice(eqIdx + 1).trim();
-    const attrs: Record<string, string> = {};
-    for (const attr of attrParts) {
-      const i = attr.indexOf("=");
-      if (i >= 0) {
-        attrs[attr.slice(0, i).toLowerCase()] = attr.slice(i + 1);
-      } else {
-        attrs[attr.toLowerCase()] = "true";
-      }
-    }
-    return {
-      name,
-      value,
-      domain,
-      path: attrs["path"] ?? "/",
-      httpOnly: "httponly" in attrs,
-      secure: "secure" in attrs,
-      sameSite: normalizeSameSite(attrs["samesite"]),
-    };
-  });
-}
-
-/**
- * Logs in via the API and injects the session cookie into the browser context.
- * Avoids UI login entirely: no rate-limit risk, no flaky form interactions.
- */
-async function apiLogin(
-  request: APIRequestContext,
-  page: Page,
-  creds: { username: string; password: string }
-): Promise<void> {
-  const res = await request.post("/api/auth/login", {
-    data: { username: creds.username, password: creds.password },
-  });
+async function apiLogin(api: APIRequestContext, creds: Creds): Promise<void> {
+  const res = await api.post("/api/auth/login", { data: creds });
   if (!res.ok()) {
     throw new Error(
       `apiLogin failed for ${creds.username}: ${res.status()} ${await res.text()}`
     );
   }
-  const setCookieHeader = res.headers()["set-cookie"];
-  if (setCookieHeader) {
-    const domain = new URL("http://localhost:3000").hostname;
-    const cookies = parseSetCookieHeader(setCookieHeader, domain);
-    await page.context().addCookies(cookies);
-  }
 }
 
 /**
- * Ensures the initial admin account exists. Idempotent: ignores 400 if already set up.
+ * Ensures the initial admin account exists. Idempotent: setup returns 400 once
+ * an admin is present, which we ignore. A genuine failure surfaces later when
+ * apiLogin cannot authenticate.
  */
-async function ensureAdmin(request: APIRequestContext): Promise<void> {
-  await request.post("/api/auth/setup", {
+async function ensureAdmin(api: APIRequestContext): Promise<void> {
+  await api.post("/api/auth/setup", {
     data: {
       username: ADMIN_CREDS.username,
       password: ADMIN_CREDS.password,
@@ -109,29 +54,14 @@ async function ensureAdmin(request: APIRequestContext): Promise<void> {
 }
 
 /**
- * Gets an admin session cookie string for use in subsequent API calls.
- */
-async function getAdminCookieHeader(
-  request: APIRequestContext
-): Promise<string> {
-  const res = await request.post("/api/auth/login", { data: ADMIN_CREDS });
-  if (!res.ok()) {
-    throw new Error(`Admin login failed: ${res.status()} ${await res.text()}`);
-  }
-  return res.headers()["set-cookie"] ?? "";
-}
-
-/**
  * Ensures a non-admin user exists. Ignores 409 Conflict (already exists).
  */
 async function ensureUser(
-  request: APIRequestContext,
-  adminCookieHeader: string,
-  creds: { username: string; password: string },
+  adminApi: APIRequestContext,
+  creds: Creds,
   role: "user" | "mod"
 ): Promise<void> {
-  const res = await request.post("/api/users", {
-    headers: { Cookie: adminCookieHeader },
+  const res = await adminApi.post("/api/users", {
     data: { username: creds.username, password: creds.password, role },
   });
   if (!res.ok() && res.status() !== 409) {
@@ -142,28 +72,31 @@ async function ensureUser(
 }
 
 export const test = base.extend<AuthFixtures>({
-  adminPage: async ({ page, request }, use) => {
+  // An APIRequestContext authenticated as admin. Its cookie jar carries the
+  // session, so specs make admin API calls without juggling cookie headers.
+  adminRequest: async ({ request }, use) => {
     await ensureAdmin(request);
-    await apiLogin(request, page, ADMIN_CREDS);
+    await apiLogin(request, ADMIN_CREDS);
+    await use(request);
+  },
+
+  adminPage: async ({ page }, use) => {
+    await ensureAdmin(page.request);
+    await apiLogin(page.request, ADMIN_CREDS);
     await use(page);
   },
 
-  userPage: async ({ page, request }, use) => {
-    await ensureAdmin(request);
-    const adminCookie = await getAdminCookieHeader(request);
-    await ensureUser(request, adminCookie, USER_CREDS, "user");
-    await apiLogin(request, page, USER_CREDS);
+  userPage: async ({ page, adminRequest }, use) => {
+    await ensureUser(adminRequest, USER_CREDS, "user");
+    await apiLogin(page.request, USER_CREDS);
     await use(page);
   },
 
-  modPage: async ({ page, request }, use) => {
-    await ensureAdmin(request);
-    const adminCookie = await getAdminCookieHeader(request);
-    await ensureUser(request, adminCookie, MOD_CREDS, "mod");
-    await apiLogin(request, page, MOD_CREDS);
+  modPage: async ({ page, adminRequest }, use) => {
+    await ensureUser(adminRequest, MOD_CREDS, "mod");
+    await apiLogin(page.request, MOD_CREDS);
     await use(page);
   },
 });
 
 export { expect } from "@playwright/test";
-export { getAdminCookieHeader as getAdminCookie };

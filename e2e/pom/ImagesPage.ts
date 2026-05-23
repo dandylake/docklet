@@ -4,13 +4,11 @@ export class ImagesPage {
   readonly page: Page;
   readonly heading: Locator;
   readonly pullButton: Locator;
-  readonly emptyState: Locator;
 
   constructor(page: Page) {
     this.page = page;
     this.heading = page.getByRole("heading", { name: "Images" });
     this.pullButton = page.getByRole("button", { name: "Pull Image" });
-    this.emptyState = page.getByText("No images found");
   }
 
   async goto(): Promise<void> {

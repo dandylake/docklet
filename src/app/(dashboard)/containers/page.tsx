@@ -93,7 +93,7 @@ export default function ContainersPage() {
 
 function ContainerCard({ container }: { container: ContainerSummary }) {
   return (
-    <Link href={`/containers/${container.id}`}>
+    <Link href={`/containers/${container.id}`} data-testid="container-card">
       <div className="card hover:bg-gray-700 transition-colors duration-200 cursor-pointer">
         <div className="flex items-center justify-between gap-4 mb-2">
           <span className="text-blue-300 font-medium text-lg truncate">

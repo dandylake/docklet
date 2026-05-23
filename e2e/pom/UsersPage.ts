@@ -18,14 +18,12 @@ export class UsersPage {
   readonly heading: Locator;
   readonly newUserButton: Locator;
   readonly usersTable: Locator;
-  readonly createError: Locator;
 
   constructor(page: Page) {
     this.page = page;
     this.heading = page.getByRole("heading", { name: "Users" });
     this.newUserButton = page.getByRole("button", { name: "New User" });
-    this.usersTable = page.locator("table");
-    this.createError = page.getByTestId("error-message");
+    this.usersTable = page.getByRole("table");
   }
 
   async goto(): Promise<void> {
@@ -34,7 +32,9 @@ export class UsersPage {
   }
 
   getUsers(): Locator {
-    return this.usersTable.locator("tbody tr");
+    // Includes the header row, but every consumer filters by username text so
+    // the header (which has no username) cannot match.
+    return this.usersTable.getByRole("row");
   }
 
   getUserRow(username: string): Locator {
@@ -46,7 +46,9 @@ export class UsersPage {
   }
 
   getDeleteButton(username: string): Locator {
-    return this.getUserRow(username).locator('button[title="Delete"], button[title="Cannot delete yourself"]');
+    // Self-row uses the disabled "Cannot delete yourself" title; both should
+    // resolve to the same action column button.
+    return this.getUserRow(username).getByTitle(/^(Delete|Cannot delete yourself)$/);
   }
 
   async openCreateModal(): Promise<void> {
@@ -61,7 +63,7 @@ export class UsersPage {
     await this.page.getByLabel("Username").fill(data.username);
     await this.page.getByLabel("Password").fill(data.password);
     if (data.role && data.role !== "user") {
-      await this.page.locator("#create-role").selectOption(data.role);
+      await this.page.getByLabel("Role").selectOption(data.role);
     }
     await this.page.getByRole("button", { name: "Create" }).click();
     await this.page
@@ -76,7 +78,7 @@ export class UsersPage {
       .getByRole("heading", { name: `Edit ${username}` })
       .waitFor({ state: "visible" });
     if (data.role) {
-      await this.page.locator("#edit-role").selectOption(data.role);
+      await this.page.getByLabel("Role").selectOption(data.role);
     }
     if (data.password) {
       await this.page.getByLabel("Reset password").fill(data.password);

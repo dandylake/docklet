@@ -1,14 +1,18 @@
 import { test, expect } from "./fixtures/auth.fixtures";
 
 test.describe("Admin-only page access", () => {
-  test("non-admin visiting /users is redirected", async ({ userPage }) => {
+  test("non-admin visiting /users is redirected to /containers", async ({
+    userPage,
+  }) => {
     await userPage.goto("/users");
-    await expect(userPage).toHaveURL(/\/(login|containers)/);
+    await expect(userPage).toHaveURL(/\/containers$/);
   });
 
-  test("non-admin visiting /settings is redirected", async ({ userPage }) => {
+  test("non-admin visiting /settings is redirected to /containers", async ({
+    userPage,
+  }) => {
     await userPage.goto("/settings");
-    await expect(userPage).toHaveURL(/\/(login|containers)/);
+    await expect(userPage).toHaveURL(/\/containers$/);
   });
 });
 

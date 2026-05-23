@@ -6,7 +6,6 @@ export class SetupPage {
   readonly passwordInput: Locator;
   readonly confirmPasswordInput: Locator;
   readonly submitButton: Locator;
-  readonly errorMessage: Locator;
   readonly successHeading: Locator;
   readonly dashboardButton: Locator;
 
@@ -16,7 +15,6 @@ export class SetupPage {
     this.passwordInput = page.getByLabel("Password", { exact: true });
     this.confirmPasswordInput = page.getByLabel("Confirm Password");
     this.submitButton = page.getByRole("button", { name: "Create Admin Account" });
-    this.errorMessage = page.getByTestId("error-message");
     this.successHeading = page.getByRole("heading", { name: "Setup Complete" });
     this.dashboardButton = page.getByRole("button", { name: "Go to Dashboard" });
   }

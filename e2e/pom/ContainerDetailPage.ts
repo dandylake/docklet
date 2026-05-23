@@ -1,23 +1,12 @@
 import { type Page, type Locator } from "@playwright/test";
 
-export type ContainerTab =
-  | "Logs"
-  | "Stats"
-  | "Info"
-  | "Ports"
-  | "Mounts"
-  | "Environment";
-
 export class ContainerDetailPage {
   readonly page: Page;
   readonly startButton: Locator;
   readonly stopButton: Locator;
   readonly restartButton: Locator;
-  readonly editButton: Locator;
   readonly deleteButton: Locator;
   readonly statusBadge: Locator;
-  readonly execInput: Locator;
-  readonly execRunButton: Locator;
   readonly statsCpu: Locator;
   readonly statsMemory: Locator;
 
@@ -26,22 +15,17 @@ export class ContainerDetailPage {
     this.startButton = page.getByRole("button", { name: "Start", exact: true });
     this.stopButton = page.getByRole("button", { name: "Stop", exact: true });
     this.restartButton = page.getByRole("button", { name: "Restart container" });
-    this.editButton = page.getByRole("button", { name: "Edit container" });
     this.deleteButton = page.getByRole("button", { name: "Delete container" });
     this.statusBadge = page.getByTestId("status-badge");
-    this.execInput = page.getByPlaceholder("Enter command...");
-    this.execRunButton = page.getByRole("button", { name: "Run" });
     this.statsCpu = page.getByTestId("stats-cpu");
     this.statsMemory = page.getByTestId("stats-memory");
   }
 
   async goto(containerId: string): Promise<void> {
     await this.page.goto(`/containers/${containerId}`);
-    await this.page.getByRole("button", { name: "Logs" }).waitFor({ state: "visible" });
-  }
-
-  async selectTab(tab: ContainerTab): Promise<void> {
-    await this.page.getByRole("button", { name: tab }).click();
+    await this.page
+      .getByRole("button", { name: "Logs" })
+      .waitFor({ state: "visible" });
   }
 
   async start(): Promise<void> {
@@ -59,27 +43,12 @@ export class ContainerDetailPage {
     await this.stopButton.waitFor({ state: "visible", timeout: 15_000 });
   }
 
-  async delete(confirm = true): Promise<void> {
+  async delete(): Promise<void> {
     await this.deleteButton.click();
     await this.page
       .getByRole("heading", { name: "Delete Container" })
       .waitFor({ state: "visible" });
-    if (confirm) {
-      await this.page.getByRole("button", { name: "Delete" }).last().click();
-      await this.page.waitForURL(/\/containers$/);
-    } else {
-      await this.page.getByRole("button", { name: "Cancel" }).click();
-      await this.page
-        .getByRole("heading", { name: "Delete Container" })
-        .waitFor({ state: "hidden" });
-    }
-  }
-
-  async execCommand(cmd: string): Promise<string> {
-    await this.execInput.fill(cmd);
-    await this.execRunButton.click();
-    const output = this.page.getByTestId("exec-output");
-    await output.waitFor({ state: "visible", timeout: 15_000 });
-    return (await output.textContent()) ?? "";
+    await this.page.getByRole("button", { name: "Delete" }).last().click();
+    await this.page.waitForURL(/\/containers$/);
   }
 }

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { Readable } from "stream";
 
 const mockImage = {
   remove: vi.fn(),
@@ -14,7 +15,16 @@ vi.mock("./client", () => ({
   getDocker: () => mockDocker,
 }));
 
-import { listImages, removeImage, parsePullProgress } from "./images";
+import { listImages, removeImage, parsePullProgress, pullImageLines } from "./images";
+
+async function collect(gen: AsyncGenerator<string>, max = 100): Promise<string[]> {
+  const out: string[] = [];
+  for await (const value of gen) {
+    out.push(value);
+    if (out.length >= max) break;
+  }
+  return out;
+}
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -123,5 +133,70 @@ describe("parsePullProgress", () => {
 
   it("when the input is an empty string — returns null", () => {
     expect(parsePullProgress("")).toBeNull();
+  });
+});
+
+describe("pullImageLines", () => {
+  it("yields each newline-delimited JSON frame from dockerode untouched", async () => {
+    mockDocker.pull.mockResolvedValue(
+      Readable.from([
+        Buffer.from('{"status":"Pulling fs layer","id":"a"}\n', "utf-8"),
+        Buffer.from('{"status":"Download complete","id":"a"}\n', "utf-8"),
+      ])
+    );
+
+    const out = await collect(pullImageLines("nginx:latest"));
+    expect(out.slice(0, 2)).toEqual([
+      '{"status":"Pulling fs layer","id":"a"}',
+      '{"status":"Download complete","id":"a"}',
+    ]);
+  });
+
+  it("on normal end — appends a {complete:true} terminator", async () => {
+    mockDocker.pull.mockResolvedValue(Readable.from([]));
+
+    const out = await collect(pullImageLines("nginx:latest"));
+    expect(out).toHaveLength(1);
+    expect(JSON.parse(out[0])).toEqual({ complete: true });
+  });
+
+  it("when the source stream errors — yields an {error} terminator instead", async () => {
+    const stream = new Readable({
+      read() {
+        this.destroy(new Error("pull failed"));
+      },
+    });
+    mockDocker.pull.mockResolvedValue(stream);
+
+    const out = await collect(pullImageLines("nginx:latest"));
+    expect(JSON.parse(out[out.length - 1])).toEqual({ error: "pull failed" });
+  });
+
+  it("splits multi-line buffers into one frame per line", async () => {
+    mockDocker.pull.mockResolvedValue(
+      Readable.from([
+        Buffer.from('{"status":"a"}\n{"status":"b"}\n{"status":"c"}\n', "utf-8"),
+      ])
+    );
+
+    const out = await collect(pullImageLines("nginx:latest"));
+    // 3 status frames + the {complete:true} terminator.
+    expect(out).toHaveLength(4);
+    expect(JSON.parse(out[3])).toEqual({ complete: true });
+  });
+
+  it("when the consumer stops iterating — destroys the upstream stream", async () => {
+    const stream = Readable.from([
+      Buffer.from('{"status":"a"}\n', "utf-8"),
+      Buffer.from('{"status":"b"}\n', "utf-8"),
+    ]);
+    const destroySpy = vi.spyOn(stream, "destroy");
+    mockDocker.pull.mockResolvedValue(stream);
+
+    const gen = pullImageLines("nginx:latest");
+    await gen.next();
+    await gen.return(undefined);
+
+    expect(destroySpy).toHaveBeenCalled();
   });
 });

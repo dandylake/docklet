@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { Readable } from "stream";
 
 const mockContainer = {
   inspect: vi.fn(),
@@ -43,6 +44,7 @@ import {
   stopContainer,
   restartContainer,
   removeContainer,
+  containerLogLines,
   buildCreateOptions,
   resolveVolumePath,
 } from "./containers";
@@ -369,5 +371,78 @@ describe("resolveVolumePath", () => {
 
   it("when the path traverses above root mid-path — throws Invalid volume path", () => {
     expect(() => resolveVolumePath("app", "/data/../etc")).toThrow("Invalid volume path");
+  });
+});
+
+/** Build a Docker non-TTY log frame: one 8-byte header + utf8 payload.
+ *  The first header byte is the stream id (1=stdout, 2=stderr); the
+ *  implementation only checks that it is ≤ 2, so we pass 1. */
+function dockerLogFrame(payload: string): Buffer {
+  const header = Buffer.from([1, 0, 0, 0, 0, 0, 0, 0]);
+  return Buffer.concat([header, Buffer.from(payload, "utf-8")]);
+}
+
+async function collect(gen: AsyncGenerator<string>, max = 100): Promise<string[]> {
+  const out: string[] = [];
+  for await (const value of gen) {
+    out.push(value);
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
+describe("containerLogLines", () => {
+  it("strips Docker's 8-byte multiplex header from non-TTY frames", async () => {
+    mockContainer.logs.mockResolvedValue(
+      Readable.from([dockerLogFrame("hello world\n")])
+    );
+
+    const lines = await collect(containerLogLines("abc"));
+    expect(lines.map((l) => JSON.parse(l))).toEqual(["hello world"]);
+  });
+
+  it("when a line is short or its first byte is > 2 — leaves it untouched (TTY mode)", async () => {
+    // TTY containers emit plain text without the 8-byte header. The leading
+    // 'H' (0x48) sits well above the stream-id range so the strip must not fire.
+    mockContainer.logs.mockResolvedValue(Readable.from([Buffer.from("Hello\n", "utf-8")]));
+
+    const lines = await collect(containerLogLines("abc"));
+    expect(lines.map((l) => JSON.parse(l))).toEqual(["Hello"]);
+  });
+
+  it("skips blank lines between frames", async () => {
+    mockContainer.logs.mockResolvedValue(
+      Readable.from([dockerLogFrame("first\n\nsecond\n   \n")])
+    );
+
+    const lines = await collect(containerLogLines("abc"));
+    // Only the header-bearing first line gets its header stripped; subsequent
+    // lines within the same chunk are passed through whole, which is the
+    // existing implementation's documented behaviour.
+    expect(lines.map((l) => JSON.parse(l))).toEqual(["first", "second"]);
+  });
+
+  it("forwards the tail option to docker", async () => {
+    mockContainer.logs.mockResolvedValue(Readable.from([]));
+
+    await collect(containerLogLines("abc", { tail: 50 }));
+    expect(mockContainer.logs).toHaveBeenLastCalledWith({
+      follow: true,
+      stdout: true,
+      stderr: true,
+      tail: 50,
+    });
+  });
+
+  it("when the consumer stops iterating — destroys the upstream stream", async () => {
+    const stream = Readable.from([dockerLogFrame("one\n"), dockerLogFrame("two\n")]);
+    const destroySpy = vi.spyOn(stream, "destroy");
+    mockContainer.logs.mockResolvedValue(stream);
+
+    const gen = containerLogLines("abc");
+    await gen.next();
+    await gen.return(undefined);
+
+    expect(destroySpy).toHaveBeenCalled();
   });
 });

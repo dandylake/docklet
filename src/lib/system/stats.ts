@@ -58,6 +58,47 @@ export async function getSystemStats(): Promise<SystemStats> {
   };
 }
 
+/** Yields snapshots of `getSystemStats()` as JSON strings, starting
+ *  immediately and then on every `intervalMs` tick. Per-tick failures are
+ *  swallowed so a transient probe error doesn't break the stream; the
+ *  next tick will retry. Iterator return aborts the in-flight sleep so
+ *  the generator can clean up promptly. */
+export async function* systemStatsStream(
+  opts: { intervalMs: number }
+): AsyncGenerator<string> {
+  const { intervalMs } = opts;
+  const abort = new AbortController();
+
+  try {
+    while (!abort.signal.aborted) {
+      try {
+        const snapshot = await getSystemStats();
+        yield JSON.stringify(snapshot);
+      } catch {
+        // Skip this tick; the next one will retry.
+      }
+      if (abort.signal.aborted) break;
+      await sleep(intervalMs, abort.signal);
+    }
+  } finally {
+    abort.abort();
+  }
+}
+
+function sleep(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
 function pickLargestMount(
   fs: Array<{ mount: string; size: number; used: number }>
 ): { mount: string; size: number; used: number } | undefined {

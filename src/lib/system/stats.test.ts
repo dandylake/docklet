@@ -27,7 +27,7 @@ vi.mock("@/lib/docker/client", () => ({
 }));
 
 import si from "systeminformation";
-import { getSystemStats } from "./stats";
+import { getSystemStats, systemStatsStream } from "./stats";
 
 type LoadData = Awaited<ReturnType<typeof si.currentLoad>>;
 type MemData = Awaited<ReturnType<typeof si.mem>>;
@@ -163,5 +163,45 @@ describe("getSystemStats", () => {
       os: { platform: process.platform, distro: "", release: "" },
       docker: { running: 2, stopped: 1, total: 3, images: 2 },
     });
+  });
+});
+
+describe("systemStatsStream", () => {
+  it("yields a first snapshot immediately, then again on every intervalMs tick", async () => {
+    vi.useFakeTimers();
+    try {
+      const gen = systemStatsStream({ intervalMs: 1000 });
+
+      // First snapshot resolves on its own; no timer needed.
+      const first = await gen.next();
+      expect(first.done).toBe(false);
+      expect(JSON.parse(first.value as string).docker.running).toBe(2);
+
+      // Each subsequent snapshot waits for the timer.
+      const secondPromise = gen.next();
+      await vi.advanceTimersByTimeAsync(1000);
+      const second = await secondPromise;
+      expect(second.done).toBe(false);
+      expect(JSON.parse(second.value as string)).toBeDefined();
+
+      await gen.return(undefined);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("when the consumer returns mid-sleep — gen.return() resolves without advancing the timer", async () => {
+    vi.useFakeTimers();
+    try {
+      const gen = systemStatsStream({ intervalMs: 60_000 });
+      await gen.next(); // pull the eager first snapshot; the generator now awaits the timer
+
+      // Return must resolve promptly because the generator's finally block aborts
+      // the in-flight sleep; if it required the 60s timer to elapse, this would hang.
+      const returnResult = await gen.return(undefined);
+      expect(returnResult.done).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -37,7 +37,7 @@ export class ImagesPage {
 
   async pullImage(tag: string, timeout = 120_000): Promise<void> {
     await this.openPullModal();
-    await this.page.getByLabel("Image").fill(tag);
+    await this.page.getByLabel("Image", { exact: true }).fill(tag);
     await this.page.getByRole("button", { name: "Pull", exact: true }).click();
     await this.page
       .getByRole("heading", { name: "Pull Image" })
@@ -49,7 +49,7 @@ export class ImagesPage {
     await this.page
       .getByRole("heading", { name: "Delete Image" })
       .waitFor({ state: "visible" });
-    await this.page.getByRole("button", { name: "Delete" }).last().click();
+    await this.page.getByRole("button", { name: "Delete", exact: true }).click();
     await this.getImageCard(tagOrName).waitFor({ state: "hidden", timeout: 15_000 });
   }
 }

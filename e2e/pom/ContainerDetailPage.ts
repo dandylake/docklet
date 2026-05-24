@@ -50,7 +50,7 @@ export class ContainerDetailPage {
     await this.page
       .getByRole("heading", { name: "Delete Container" })
       .waitFor({ state: "visible" });
-    await this.page.getByRole("button", { name: "Delete" }).last().click();
+    await this.page.getByRole("button", { name: "Delete", exact: true }).click();
     await this.page.waitForURL(/\/containers$/);
   }
 

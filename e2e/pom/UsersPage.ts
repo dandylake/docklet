@@ -94,7 +94,7 @@ export class UsersPage {
     await this.page
       .getByRole("heading", { name: "Delete User" })
       .waitFor({ state: "visible" });
-    await this.page.getByRole("button", { name: "Delete" }).last().click();
+    await this.page.getByRole("button", { name: "Delete", exact: true }).click();
     await this.getUserRow(username).waitFor({ state: "hidden" });
   }
 }

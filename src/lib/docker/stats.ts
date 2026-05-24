@@ -1,5 +1,6 @@
 import type Dockerode from "dockerode";
 import { getDocker } from "./client";
+import { destroyStream } from "./stream-utils";
 
 export interface RawStats {
   read: string;
@@ -204,6 +205,46 @@ export async function streamContainerStats(
   return (await container.stats({
     stream: true,
   })) as unknown as NodeJS.ReadableStream;
+}
+
+/** Yields normalized ContainerStats as JSON strings, one per docker
+ *  stats frame. Buffers across chunk boundaries since docker may split
+ *  a frame mid-line. Malformed frames are skipped silently. The
+ *  upstream dockerode stream is destroyed when the consumer
+ *  disconnects (the iterator's finally runs on `return()`). */
+export async function* containerStatsFrames(
+  id: string,
+  meta: { name: string; state: string }
+): AsyncGenerator<string> {
+  const stream = await streamContainerStats(id);
+  let buffer = "";
+
+  try {
+    for await (const chunk of stream as unknown as AsyncIterable<Buffer>) {
+      buffer += chunk.toString("utf-8");
+      let nl = buffer.indexOf("\n");
+      while (nl !== -1) {
+        const line = buffer.slice(0, nl);
+        buffer = buffer.slice(nl + 1);
+        if (line.trim()) {
+          try {
+            const raw = JSON.parse(line) as RawStats;
+            const stats = normalizeStats(raw, {
+              id,
+              name: meta.name,
+              state: meta.state,
+            });
+            yield JSON.stringify(stats);
+          } catch {
+            // Skip malformed frame.
+          }
+        }
+        nl = buffer.indexOf("\n");
+      }
+    }
+  } finally {
+    destroyStream(stream);
+  }
 }
 
 /** Yields snapshots of `getOverview()` as JSON strings, starting

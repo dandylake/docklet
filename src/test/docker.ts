@@ -249,12 +249,13 @@ export class FakeDocker {
           (f) => Buffer.from(JSON.stringify(f) + "\n")
         );
         const stream = Readable.from(chunks) as FakeStatsStream;
-        stream.destroyed = false;
         stream.destroyCalls = 0;
         const origDestroy = stream.destroy.bind(stream);
+        // Track the call but let Node's real destroy set `destroyed`.
+        // Pre-setting destroyed=true short-circuits Readable.destroy, which
+        // breaks the async iterator's natural end signal under for-await.
         stream.destroy = ((...args: unknown[]) => {
           stream.destroyCalls++;
-          stream.destroyed = true;
           return (origDestroy as (...a: unknown[]) => Readable)(...args);
         }) as typeof stream.destroy;
         this.lastStatsStream = stream;

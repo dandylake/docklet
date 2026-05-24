@@ -14,6 +14,7 @@ vi.mock("./client", () => ({
   getDocker: () => mockDocker,
 }));
 
+import { Readable } from "stream";
 import {
   computeCpuPercent,
   computeMemoryUsage,
@@ -24,6 +25,7 @@ import {
   getContainerStatsSnapshot,
   getOverview,
   overviewStream,
+  containerStatsFrames,
   type RawStats,
   type ContainerStats,
 } from "./stats";
@@ -428,5 +430,71 @@ describe("overviewStream", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("containerStatsFrames", () => {
+  function jsonFrame(overrides: Partial<RawStats> = {}): string {
+    return JSON.stringify(makeRawStats(overrides));
+  }
+
+  it("when a JSON frame is split across two chunks — reassembles it into one yield", async () => {
+    const frame = jsonFrame() + "\n";
+    const split = Math.floor(frame.length / 2);
+    const upstream = Readable.from([
+      Buffer.from(frame.slice(0, split)),
+      Buffer.from(frame.slice(split)),
+    ]);
+    mockContainer.stats.mockResolvedValue(upstream);
+
+    const out: string[] = [];
+    for await (const s of containerStatsFrames("c1", { name: "n", state: "running" })) {
+      out.push(s);
+    }
+
+    expect(out).toHaveLength(1);
+    const stats = JSON.parse(out[0]) as ContainerStats;
+    expect(stats).toMatchObject({ id: "c1", name: "n", state: "running" });
+  });
+
+  it("when one chunk contains multiple complete frames — yields one string per frame", async () => {
+    const upstream = Readable.from([
+      Buffer.from(jsonFrame() + "\n" + jsonFrame() + "\n"),
+    ]);
+    mockContainer.stats.mockResolvedValue(upstream);
+
+    const out: string[] = [];
+    for await (const s of containerStatsFrames("c1", { name: "n", state: "running" })) {
+      out.push(s);
+    }
+
+    expect(out).toHaveLength(2);
+  });
+
+  it("when a malformed line sits between two good frames — skips the bad line and keeps yielding", async () => {
+    const upstream = Readable.from([
+      Buffer.from(jsonFrame() + "\nnot-json\n" + jsonFrame() + "\n"),
+    ]);
+    mockContainer.stats.mockResolvedValue(upstream);
+
+    const out: string[] = [];
+    for await (const s of containerStatsFrames("c1", { name: "n", state: "running" })) {
+      out.push(s);
+    }
+
+    expect(out).toHaveLength(2);
+  });
+
+  it("when the consumer returns early — destroys the upstream dockerode stream", async () => {
+    const upstream = Readable.from([
+      Buffer.from(jsonFrame() + "\n" + jsonFrame() + "\n"),
+    ]);
+    mockContainer.stats.mockResolvedValue(upstream);
+
+    const gen = containerStatsFrames("c1", { name: "n", state: "running" });
+    await gen.next(); // pull one frame, then bail
+    await gen.return(undefined);
+
+    expect(upstream.destroyed).toBe(true);
   });
 });

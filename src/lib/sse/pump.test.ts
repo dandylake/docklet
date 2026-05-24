@@ -48,6 +48,7 @@ describe("pumpToSSE", () => {
     expect(await readAll(res)).toBe("data: one\n\ndata: two\n\ndata: three\n\n");
   });
 
+
   it("sets text/event-stream headers expected by EventSource consumers", () => {
     const res = pumpToSSE(fromArray([]));
     expect(res.headers.get("Content-Type")).toBe("text/event-stream");

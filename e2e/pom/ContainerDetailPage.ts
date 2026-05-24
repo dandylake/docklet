@@ -7,6 +7,7 @@ export class ContainerDetailPage {
   readonly restartButton: Locator;
   readonly deleteButton: Locator;
   readonly statusBadge: Locator;
+  readonly statsTabButton: Locator;
   readonly statsCpu: Locator;
   readonly statsMemory: Locator;
 
@@ -17,6 +18,7 @@ export class ContainerDetailPage {
     this.restartButton = page.getByRole("button", { name: "Restart container" });
     this.deleteButton = page.getByRole("button", { name: "Delete container" });
     this.statusBadge = page.getByTestId("status-badge");
+    this.statsTabButton = page.getByRole("button", { name: "Stats" });
     this.statsCpu = page.getByTestId("stats-cpu");
     this.statsMemory = page.getByTestId("stats-memory");
   }
@@ -50,5 +52,12 @@ export class ContainerDetailPage {
       .waitFor({ state: "visible" });
     await this.page.getByRole("button", { name: "Delete" }).last().click();
     await this.page.waitForURL(/\/containers$/);
+  }
+
+  async openStatsTab(): Promise<void> {
+    await this.statsTabButton.click();
+    // Stats cards only mount after the first SSE frame arrives, so waiting for
+    // the CPU testid proves the tab is open *and* the stream is producing.
+    await this.statsCpu.waitFor({ state: "visible", timeout: 15_000 });
   }
 }

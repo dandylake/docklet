@@ -142,37 +142,43 @@ test.describe("Delete Container", () => {
 });
 
 test.describe("Container Stats tab", () => {
-  let statsContainerId: string | null = null;
-
-  test.afterEach(async ({ adminRequest }) => {
-    if (statsContainerId) {
-      await apiDeleteContainer(adminRequest, statsContainerId);
-      statsContainerId = null;
-    }
-  });
-
   test("for a running container — renders live CPU and memory values from the SSE stream", async ({
     adminPage,
     adminRequest,
   }) => {
-    statsContainerId = await apiCreateContainer(
+    const id = await apiCreateContainer(
       adminRequest,
       "e2e-stats",
       "alpine:latest",
       ["sleep", "3600"]
     );
-    await apiStartContainer(adminRequest, statsContainerId);
-    const detail = new ContainerDetailPage(adminPage);
-    await detail.goto(statsContainerId);
+    try {
+      await apiStartContainer(adminRequest, id);
+      const detail = new ContainerDetailPage(adminPage);
+      await detail.goto(id);
+      await detail.openStatsTab();
 
-    await adminPage.getByRole("button", { name: "Stats" }).click();
-
-    await expect
-      .soft(detail.statsCpu)
-      .toHaveText(/^\d+(\.\d+)?%$/, { timeout: 10_000 });
-    await expect
-      .soft(detail.statsMemory)
-      .toHaveText(/^\d+(\.\d+)?\s+\w+\s*\/\s*\d+(\.\d+)?\s+\w+$/);
+      // CPU is allowed to be 0% because Docker's first stats frame has an
+      // empty `precpu_stats` and legitimately computes to 0; the shape match
+      // is the strongest assertion that doesn't flake on a quiescent sample.
+      await expect
+        .soft(detail.statsCpu)
+        .toHaveText(/^\d+(\.\d+)?%$/, { timeout: 10_000 });
+      // Shape `<used> <unit> / <limit> <unit>`.
+      await expect
+        .soft(detail.statsMemory)
+        .toHaveText(
+          /^\d+(\.\d+)?\s+\w+\s*\/\s*\d+(\.\d+)?\s+\w+$/,
+          { timeout: 10_000 }
+        );
+      // Reject a "/ 0 B" suffix: `formatBytes(0)` is the only way the limit
+      // renders that string, and a real container's memory limit is never
+      // below 1 KB, so this means the SSE pipeline delivered a degenerate
+      // frame that the shape regex would otherwise accept.
+      await expect.soft(detail.statsMemory).not.toHaveText(/\/\s*0\s+B$/);
+    } finally {
+      await apiDeleteContainer(adminRequest, id);
+    }
   });
 });
 

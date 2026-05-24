@@ -23,6 +23,7 @@ import {
   aggregateOverview,
   getContainerStatsSnapshot,
   getOverview,
+  overviewStream,
   type RawStats,
   type ContainerStats,
 } from "./stats";
@@ -380,5 +381,52 @@ describe("getOverview", () => {
     const overview = await getOverview();
 
     expect(overview.totals.cpuPercent).toBe(0);
+  });
+});
+
+describe("overviewStream", () => {
+  beforeEach(() => {
+    mockDocker.listContainers.mockResolvedValue([
+      { Id: "run-1", Names: ["/alpha"], State: "running" },
+    ]);
+    mockContainer.stats.mockResolvedValue(makeRawStats());
+  });
+
+  it("yields a first snapshot immediately, then again on every intervalMs tick", async () => {
+    vi.useFakeTimers();
+    try {
+      const gen = overviewStream({ intervalMs: 1000 });
+
+      // First snapshot resolves on its own; no timer needed.
+      const first = await gen.next();
+      expect(first.done).toBe(false);
+      expect(JSON.parse(first.value as string).counts.running).toBe(1);
+
+      // Each subsequent snapshot waits for the timer.
+      const secondPromise = gen.next();
+      await vi.advanceTimersByTimeAsync(1000);
+      const second = await secondPromise;
+      expect(second.done).toBe(false);
+      expect(JSON.parse(second.value as string)).toBeDefined();
+
+      await gen.return(undefined);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("when the consumer returns mid-sleep — gen.return() resolves without advancing the timer", async () => {
+    vi.useFakeTimers();
+    try {
+      const gen = overviewStream({ intervalMs: 60_000 });
+      await gen.next(); // pull the eager first snapshot; the generator now awaits the timer
+
+      // Return must resolve promptly because the generator's finally block aborts
+      // the in-flight sleep; if it required the 60s timer to elapse, this would hang.
+      const returnResult = await gen.return(undefined);
+      expect(returnResult.done).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -205,3 +205,44 @@ export async function streamContainerStats(
     stream: true,
   })) as unknown as NodeJS.ReadableStream;
 }
+
+/** Yields snapshots of `getOverview()` as JSON strings, starting
+ *  immediately and then on every `intervalMs` tick. Per-tick failures are
+ *  swallowed so a transient probe error doesn't break the stream; the
+ *  next tick will retry. Iterator return aborts the in-flight sleep so
+ *  the generator can clean up promptly. */
+export async function* overviewStream(
+  opts: { intervalMs: number }
+): AsyncGenerator<string> {
+  const { intervalMs } = opts;
+  const abort = new AbortController();
+
+  try {
+    while (!abort.signal.aborted) {
+      try {
+        const snapshot = await getOverview();
+        yield JSON.stringify(snapshot);
+      } catch {
+        // Skip this tick; the next one will retry.
+      }
+      if (abort.signal.aborted) break;
+      await sleep(intervalMs, abort.signal);
+    }
+  } finally {
+    abort.abort();
+  }
+}
+
+function sleep(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}

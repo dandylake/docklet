@@ -2,6 +2,7 @@ import { mkdirSync } from "fs";
 import { resolve } from "path";
 import { hostname } from "os";
 import { getDocker } from "./client";
+import { destroyStream } from "./stream-utils";
 import { getDataDir, getHostDataDir } from "@/lib/db";
 import type {
   ContainerSummary,
@@ -217,10 +218,13 @@ export async function removeContainer(
   await docker.getContainer(id).remove({ force });
 }
 
-export async function getContainerLogs(
+/** Yields container log lines as JSON-encoded strings (one string per line,
+ *  ready for SSE framing). Strips Docker's 8-byte frame header on non-TTY
+ *  streams. Destroys the upstream log stream when the consumer disconnects. */
+export async function* containerLogLines(
   id: string,
-  opts: { tail?: number; since?: number } = {}
-): Promise<NodeJS.ReadableStream> {
+  opts: { tail?: number } = {}
+): AsyncGenerator<string> {
   const docker = getDocker();
   const container = docker.getContainer(id);
   const stream = await container.logs({
@@ -228,9 +232,23 @@ export async function getContainerLogs(
     stdout: true,
     stderr: true,
     tail: opts.tail ?? 200,
-    since: opts.since,
   });
-  return stream;
+
+  try {
+    for await (const chunk of stream as unknown as AsyncIterable<Buffer>) {
+      const text = chunk.toString("utf-8");
+      for (const line of text.split("\n")) {
+        if (!line.trim()) continue;
+        // Docker multiplexes stdout/stderr with an 8-byte header per frame
+        // on non-TTY containers; the first byte is the stream id (0, 1, or 2).
+        const clean =
+          line.length > 8 && line.charCodeAt(0) <= 2 ? line.slice(8) : line;
+        yield JSON.stringify(clean);
+      }
+    }
+  } finally {
+    destroyStream(stream);
+  }
 }
 
 export async function execInContainer(

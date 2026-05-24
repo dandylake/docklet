@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSession, type SessionPayload } from "./session";
+import { isSelfContainer } from "@/lib/docker/containers";
 import { AppError } from "@/lib/errors";
 
 export async function requireAuth(): Promise<SessionPayload> {
@@ -15,6 +16,20 @@ export async function requireRole(
 ): Promise<SessionPayload> {
   const session = await requireAuth();
   if (!roles.includes(session.role)) {
+    throw new AuthError("Forbidden", 403);
+  }
+  return session;
+}
+
+/** Require a session and enforce the self-container access policy: only
+ *  admins may read or mutate the container that Docklet itself runs in.
+ *  Non-self container IDs pass through unchanged. Returns the session so
+ *  callers that need `session.role` or `session.userId` can keep using it. */
+export async function requireSelfContainerAccess(
+  id: string,
+): Promise<SessionPayload> {
+  const session = await requireAuth();
+  if (session.role !== "admin" && isSelfContainer(id)) {
     throw new AuthError("Forbidden", 403);
   }
   return session;

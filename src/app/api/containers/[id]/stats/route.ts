@@ -1,5 +1,4 @@
-import { requireAuth, AuthError, handleApiError } from "@/lib/auth/middleware";
-import { isSelfContainer } from "@/lib/docker/containers";
+import { requireSelfContainerAccess, handleApiError } from "@/lib/auth/middleware";
 import { streamContainerStats, normalizeStats, type RawStats } from "@/lib/docker/stats";
 
 export const runtime = "nodejs";
@@ -12,11 +11,8 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const session = await requireAuth();
     const { id } = await params;
-    if (session.role !== "admin" && isSelfContainer(id)) {
-      throw new AuthError("Forbidden", 403);
-    }
+    await requireSelfContainerAccess(id);
 
     const dockerStream = await streamContainerStats(id);
     let aborted = false;

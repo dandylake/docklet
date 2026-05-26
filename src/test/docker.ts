@@ -205,6 +205,11 @@ export class FakeDocker {
           throw new Error(`No such container: ${id}`);
         }
       },
+      rename: async (opts: { name: string }) => {
+        const c = find();
+        if (!c) throw new Error(`No such container: ${id}`);
+        c.name = opts.name;
+      },
       inspect: async () => {
         const c = find();
         if (!c) throw new Error(`No such container: ${id}`);

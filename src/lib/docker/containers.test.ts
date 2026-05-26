@@ -7,6 +7,7 @@ const mockContainer = {
   stop: vi.fn(),
   restart: vi.fn(),
   remove: vi.fn(),
+  rename: vi.fn(),
   logs: vi.fn(),
   exec: vi.fn(),
 };
@@ -44,10 +45,38 @@ import {
   stopContainer,
   restartContainer,
   removeContainer,
+  renameContainer,
+  recreateContainer,
+  RecreateRolledBackError,
+  RecreateLostError,
+  containerDetailToCreateInput,
   containerLogLines,
   buildCreateOptions,
   resolveVolumePath,
 } from "./containers";
+import type { ContainerDetail } from "./types";
+
+function buildDetail(overrides: Partial<ContainerDetail> = {}): ContainerDetail {
+  return {
+    id: "abc",
+    name: "test",
+    image: "alpine",
+    state: "running",
+    status: "running",
+    ports: [],
+    created: 0,
+    env: [],
+    mounts: [],
+    restartPolicy: { name: "", maximumRetryCount: 0 },
+    networkMode: "default",
+    hostname: "",
+    cmd: [],
+    entrypoint: [],
+    labels: {},
+    resources: {},
+    ...overrides,
+  };
+}
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -345,6 +374,183 @@ describe("createContainer", () => {
         }),
       })
     );
+  });
+});
+
+describe("containerDetailToCreateInput", () => {
+  it("returns only name and image when the detail has no optional fields", () => {
+    const input = containerDetailToCreateInput(buildDetail({ name: "web", image: "nginx" }));
+    expect(input).toEqual({ name: "web", image: "nginx" });
+  });
+
+  it("maps mounts to volumes with containerPath and rw/ro mode", () => {
+    const input = containerDetailToCreateInput(
+      buildDetail({
+        mounts: [
+          { source: "/host/a", destination: "/app/data", mode: "rw", rw: true },
+          { source: "/host/b", destination: "/app/cache", mode: "ro", rw: false },
+        ],
+      })
+    );
+    expect(input.volumes).toEqual([
+      { containerPath: "/app/data", mode: "rw" },
+      { containerPath: "/app/cache", mode: "ro" },
+    ]);
+  });
+
+  it("passes through ports, env, hostname, cmd, restartPolicy, and resources", () => {
+    const input = containerDetailToCreateInput(
+      buildDetail({
+        ports: [{ containerPort: 80, hostPort: 8080, protocol: "tcp" }],
+        env: ["FOO=bar"],
+        hostname: "myhost",
+        cmd: ["nginx", "-g", "daemon off;"],
+        restartPolicy: { name: "always", maximumRetryCount: 0 },
+        resources: { cpuLimit: 0.5, memoryLimit: 268435456 },
+      })
+    );
+    expect(input.ports).toEqual([{ containerPort: 80, hostPort: 8080, protocol: "tcp" }]);
+    expect(input.env).toEqual(["FOO=bar"]);
+    expect(input.hostname).toBe("myhost");
+    expect(input.cmd).toEqual(["nginx", "-g", "daemon off;"]);
+    expect(input.restartPolicy).toEqual({ name: "always", maximumRetryCount: 0 });
+    expect(input.resources).toEqual({ cpuLimit: 0.5, memoryLimit: 268435456 });
+  });
+
+  it("omits restartPolicy when the detail has no policy name", () => {
+    const input = containerDetailToCreateInput(
+      buildDetail({ restartPolicy: { name: "", maximumRetryCount: 0 } })
+    );
+    expect(input.restartPolicy).toBeUndefined();
+  });
+
+  it("drops fields the edit form does not surface (entrypoint, labels, networkMode)", () => {
+    const input = containerDetailToCreateInput(
+      buildDetail({
+        entrypoint: ["/docker-entrypoint.sh"],
+        labels: { app: "web" },
+        networkMode: "bridge",
+      })
+    );
+    expect(input).not.toHaveProperty("entrypoint");
+    expect(input.labels).toBeUndefined();
+    expect(input.networkMode).toBeUndefined();
+  });
+});
+
+describe("renameContainer", () => {
+  it("renames the container by id", async () => {
+    mockContainer.rename.mockResolvedValue(undefined);
+    await renameContainer("abc123", "new-name");
+    expect(mockDocker.getContainer).toHaveBeenCalledWith("abc123");
+    expect(mockContainer.rename).toHaveBeenCalledWith({ name: "new-name" });
+  });
+});
+
+describe("recreateContainer", () => {
+  function setupOldContainer(opts: { state?: string; name?: string } = {}) {
+    mockContainer.inspect.mockResolvedValue({
+      Id: "old-id",
+      Name: `/${opts.name ?? "web"}`,
+      Created: "2024-01-01T00:00:00Z",
+      State: { Status: opts.state ?? "running" },
+      Config: { Image: "nginx" },
+      Mounts: [],
+      HostConfig: {},
+    });
+  }
+
+  it("when the old container is running — stops, renames aside, creates, then removes", async () => {
+    setupOldContainer({ state: "running", name: "web" });
+    mockContainer.stop.mockResolvedValue(undefined);
+    mockContainer.rename.mockResolvedValue(undefined);
+    mockDocker.createContainer.mockResolvedValue({ id: "new-id" });
+    mockContainer.remove.mockResolvedValue(undefined);
+
+    const result = await recreateContainer("old-id", { name: "web-v2", image: "nginx:latest" });
+
+    expect(mockContainer.stop).toHaveBeenCalled();
+    expect(mockContainer.rename).toHaveBeenCalledTimes(1);
+    expect(mockContainer.rename).toHaveBeenCalledWith(
+      expect.objectContaining({ name: expect.stringMatching(/^web__docklet_recreate_[0-9a-f]+$/) })
+    );
+    expect(mockDocker.createContainer).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "web-v2", Image: "nginx:latest" })
+    );
+    expect(mockContainer.remove).toHaveBeenCalledWith({ force: true });
+    expect(result.id).toBe("new-id");
+  });
+
+  it("when the old container is stopped — skips stop, still renames + creates + removes", async () => {
+    setupOldContainer({ state: "exited", name: "db" });
+    mockContainer.rename.mockResolvedValue(undefined);
+    mockDocker.createContainer.mockResolvedValue({ id: "new-id" });
+    mockContainer.remove.mockResolvedValue(undefined);
+
+    await recreateContainer("old-id", { name: "db-v2", image: "postgres" });
+
+    expect(mockContainer.stop).not.toHaveBeenCalled();
+    expect(mockContainer.rename).toHaveBeenCalledTimes(1);
+    expect(mockContainer.remove).toHaveBeenCalled();
+  });
+
+  it("does not start the new container", async () => {
+    setupOldContainer({ state: "exited" });
+    mockContainer.rename.mockResolvedValue(undefined);
+    mockDocker.createContainer.mockResolvedValue({ id: "new-id" });
+    mockContainer.remove.mockResolvedValue(undefined);
+
+    await recreateContainer("old-id", { name: "x", image: "alpine" });
+
+    expect(mockContainer.start).not.toHaveBeenCalled();
+  });
+
+  it("when create fails and rollback succeeds — throws RecreateRolledBackError and original keeps its id", async () => {
+    setupOldContainer({ state: "exited", name: "web" });
+    mockContainer.rename.mockResolvedValue(undefined);
+    mockDocker.createContainer.mockRejectedValue(new Error("image not found: nginx:bogus"));
+
+    await expect(
+      recreateContainer("old-id", { name: "web", image: "nginx:bogus" })
+    ).rejects.toBeInstanceOf(RecreateRolledBackError);
+
+    // Two rename calls: one to temp, one back to original
+    expect(mockContainer.rename).toHaveBeenCalledTimes(2);
+    expect(mockContainer.rename).toHaveBeenLastCalledWith({ name: "web" });
+    // Cleanup remove never runs when create failed
+    expect(mockContainer.remove).not.toHaveBeenCalled();
+  });
+
+  it("when create fails AND rollback rename fails — throws RecreateLostError carrying the temp name", async () => {
+    setupOldContainer({ state: "exited", name: "web" });
+    let tempName: string | undefined;
+    mockContainer.rename.mockImplementationOnce(async (opts: { name: string }) => {
+      tempName = opts.name;
+    });
+    mockContainer.rename.mockRejectedValueOnce(new Error("rename failed"));
+    mockDocker.createContainer.mockRejectedValue(new Error("image pull failed"));
+
+    let caught: unknown;
+    try {
+      await recreateContainer("old-id", { name: "web", image: "nginx:bogus" });
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(RecreateLostError);
+    expect((caught as RecreateLostError).orphanedName).toBe(tempName);
+  });
+
+  it("when post-create cleanup fails — still returns success", async () => {
+    setupOldContainer({ state: "exited" });
+    mockContainer.rename.mockResolvedValue(undefined);
+    mockDocker.createContainer.mockResolvedValue({ id: "new-id" });
+    mockContainer.remove.mockRejectedValue(new Error("daemon error"));
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const result = await recreateContainer("old-id", { name: "x", image: "alpine" });
+
+    expect(result.id).toBe("new-id");
+    errSpy.mockRestore();
   });
 });
 

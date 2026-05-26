@@ -1,9 +1,11 @@
 import { mkdirSync } from "fs";
 import { resolve } from "path";
 import { hostname } from "os";
+import { randomBytes } from "crypto";
 import { getDocker } from "./client";
 import { destroyStream } from "./stream-utils";
 import { getDataDir, getHostDataDir } from "@/lib/db";
+import { AppError } from "@/lib/errors";
 import type {
   ContainerSummary,
   ContainerDetail,
@@ -11,6 +13,39 @@ import type {
   PortBinding,
   VolumeMount,
 } from "./types";
+
+/** Extract the editable spec from an inspected container, ready to feed back
+ *  into createContainer. Mirrors the field set the edit form handles today;
+ *  labels, entrypoint, networkMode, tty, and stdin are intentionally dropped
+ *  because the form does not surface them. */
+export function containerDetailToCreateInput(
+  detail: ContainerDetail
+): CreateContainerInput {
+  const input: CreateContainerInput = {
+    name: detail.name,
+    image: detail.image,
+  };
+  if (detail.ports.length > 0) input.ports = detail.ports;
+  if (detail.env.length > 0) input.env = detail.env;
+  if (detail.mounts.length > 0) {
+    input.volumes = detail.mounts.map((m) => ({
+      containerPath: m.destination,
+      mode: m.rw ? "rw" : "ro",
+    }));
+  }
+  if (detail.restartPolicy.name) {
+    input.restartPolicy = {
+      name: detail.restartPolicy.name,
+      maximumRetryCount: detail.restartPolicy.maximumRetryCount,
+    };
+  }
+  if (detail.hostname) input.hostname = detail.hostname;
+  if (detail.cmd.length > 0) input.cmd = detail.cmd;
+  if (detail.resources.cpuLimit != null || detail.resources.memoryLimit != null) {
+    input.resources = { ...detail.resources };
+  }
+  return input;
+}
 import type Dockerode from "dockerode";
 
 /** Internal type used by buildCreateOptions (host path already resolved) */
@@ -216,6 +251,91 @@ export async function removeContainer(
 ): Promise<void> {
   const docker = getDocker();
   await docker.getContainer(id).remove({ force });
+}
+
+export async function renameContainer(id: string, name: string): Promise<void> {
+  const docker = getDocker();
+  await docker.getContainer(id).rename({ name });
+}
+
+/** Thrown when the new container could not be created and the original was
+ *  successfully restored (same id, runtime data intact). */
+export class RecreateRolledBackError extends AppError {
+  constructor(public readonly createCause: unknown) {
+    const msg = createCause instanceof Error ? createCause.message : String(createCause);
+    super(500, `Update failed; original container restored. Cause: ${msg}`);
+    this.name = "RecreateRolledBackError";
+  }
+}
+
+/** Thrown when the new container could not be created AND rollback (renaming
+ *  the original back to its name) also failed. The original container still
+ *  exists on the host under `orphanedName`; recovery requires manual rename. */
+export class RecreateLostError extends AppError {
+  constructor(
+    public readonly orphanedName: string,
+    public readonly createCause: unknown,
+    public readonly rollbackCause: unknown
+  ) {
+    const createMsg = createCause instanceof Error ? createCause.message : String(createCause);
+    const rbMsg = rollbackCause instanceof Error ? rollbackCause.message : String(rollbackCause);
+    super(
+      500,
+      `Update failed and original could not be restored; the original container ` +
+        `is still on the host under the temporary name "${orphanedName}". ` +
+        `Create error: ${createMsg}. Rollback error: ${rbMsg}.`
+    );
+    this.name = "RecreateLostError";
+  }
+}
+
+/** Replace the container at `id` with a new one built from `newSpec`, using a
+ *  rename-aside dance so that a failed create leaves the original intact:
+ *
+ *    1. Inspect to capture name and running state.
+ *    2. Stop the original if it was running, freeing its ports and network.
+ *    3. Rename the original to a unique temporary name.
+ *    4. Create the new container, claiming the original's name.
+ *    5. Remove the (renamed) original.
+ *
+ *  On failure of step 4, step 3 is reversed; the original keeps its id and
+ *  runtime data. On failure of step 5 (post-success cleanup), the new
+ *  container is the desired state and the error is swallowed with a log.
+ *  The new container is created in the stopped state; callers that want it
+ *  running must call startContainer separately. */
+export async function recreateContainer(
+  id: string,
+  newSpec: CreateContainerInput
+): Promise<{ id: string }> {
+  const detail = await inspectContainer(id);
+  const originalName = detail.name;
+  const tempName = `${originalName}__docklet_recreate_${randomBytes(4).toString("hex")}`;
+
+  if (detail.state === "running") {
+    await stopContainer(id);
+  }
+
+  await renameContainer(id, tempName);
+
+  let result: { id: string };
+  try {
+    result = await createContainer(newSpec);
+  } catch (createErr) {
+    try {
+      await renameContainer(id, originalName);
+    } catch (rollbackErr) {
+      throw new RecreateLostError(tempName, createErr, rollbackErr);
+    }
+    throw new RecreateRolledBackError(createErr);
+  }
+
+  try {
+    await removeContainer(id, true);
+  } catch (cleanupErr) {
+    console.error("recreate: cleanup of original container failed", cleanupErr);
+  }
+
+  return result;
 }
 
 /** Yields container log lines as JSON-encoded strings (one string per line,

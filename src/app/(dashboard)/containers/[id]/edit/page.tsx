@@ -7,7 +7,7 @@ import Button from "@/components/ui/Button";
 import FormInput from "@/components/ui/FormInput";
 import FormSection from "@/components/ui/FormSection";
 import DynamicList from "@/components/ui/DynamicList";
-import type { ContainerDetail } from "@/lib/docker/types";
+import type { CreateContainerInput } from "@/lib/docker/types";
 
 interface PortEntry {
   containerPort: string;
@@ -40,35 +40,35 @@ interface FormState {
   stdin: boolean;
 }
 
-function containerToForm(c: ContainerDetail): FormState {
+function createInputToFormState(s: CreateContainerInput): FormState {
   return {
-    name: c.name,
-    image: c.image,
-    ports: c.ports.map((p) => ({
+    name: s.name,
+    image: s.image,
+    ports: (s.ports ?? []).map((p) => ({
       containerPort: String(p.containerPort),
       hostPort: p.hostPort ? String(p.hostPort) : "",
       protocol: p.protocol,
     })),
-    env: c.env.map((e) => {
+    env: (s.env ?? []).map((e) => {
       const idx = e.indexOf("=");
       return {
         key: idx >= 0 ? e.slice(0, idx) : e,
         value: idx >= 0 ? e.slice(idx + 1) : "",
       };
     }),
-    volumes: c.mounts.map((m) => ({
-      containerPath: m.destination,
-      mode: (m.rw ? "rw" : "ro") as "rw" | "ro",
+    volumes: (s.volumes ?? []).map((v) => ({
+      containerPath: v.containerPath,
+      mode: (v.mode === "ro" ? "ro" : "rw") as "rw" | "ro",
     })),
-    restartPolicy: c.restartPolicy.name || "no",
-    hostname: c.hostname,
-    cmd: c.cmd.join(" "),
-    cpuLimit: c.resources.cpuLimit ? String(c.resources.cpuLimit) : "",
-    memoryLimit: c.resources.memoryLimit
-      ? String(Math.round(c.resources.memoryLimit / (1024 * 1024)))
+    restartPolicy: s.restartPolicy?.name || "no",
+    hostname: s.hostname ?? "",
+    cmd: (s.cmd ?? []).join(" "),
+    cpuLimit: s.resources?.cpuLimit ? String(s.resources.cpuLimit) : "",
+    memoryLimit: s.resources?.memoryLimit
+      ? String(Math.round(s.resources.memoryLimit / (1024 * 1024)))
       : "",
-    tty: false,
-    stdin: false,
+    tty: s.tty ?? false,
+    stdin: s.stdin ?? false,
   };
 }
 
@@ -83,10 +83,10 @@ export default function EditContainerPage() {
   useEffect(() => {
     (async () => {
       try {
-        const res = await fetch(`/api/containers/${id}`);
+        const res = await fetch(`/api/containers/${id}/spec`);
         if (res.ok) {
-          const container: ContainerDetail = await res.json();
-          setForm(containerToForm(container));
+          const spec: CreateContainerInput = await res.json();
+          setForm(createInputToFormState(spec));
         }
       } catch {
         // Silently fail

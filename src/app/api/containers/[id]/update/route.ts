@@ -1,13 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod/v4";
 import { requireSelfContainerAccess, handleApiError } from "@/lib/auth/middleware";
-import {
-  inspectContainer,
-  stopContainer,
-  removeContainer,
-  createContainer,
-  startContainer,
-} from "@/lib/docker/containers";
+import { recreateContainer } from "@/lib/docker/containers";
 
 const updateContainerSchema = z.object({
   name: z.string().min(1),
@@ -61,23 +55,7 @@ export async function PUT(
     const body = await request.json();
     const input = updateContainerSchema.parse(body);
 
-    // Check current state to know whether to restart after recreate
-    const current = await inspectContainer(id);
-    const wasRunning = current.state === "running";
-
-    // Stop and remove old container
-    if (wasRunning) {
-      await stopContainer(id);
-    }
-    await removeContainer(id, true);
-
-    // Create new container with updated config
-    const result = await createContainer(input);
-
-    // Start if the old one was running
-    if (wasRunning) {
-      await startContainer(result.id);
-    }
+    const result = await recreateContainer(id, input);
 
     return NextResponse.json(result);
   } catch (error) {

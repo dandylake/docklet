@@ -30,32 +30,24 @@ describe("PUT /api/containers/[id]/update", () => {
     installFakeDocker();
   });
 
-  describe("recreate flow", () => {
-    it("when the container is running, recreates it and leaves it running", async () => {
+  describe("happy path", () => {
+    it("when admin updates a container, replaces it and returns the new id", async () => {
       await loginAs(ctx.get(), { role: "admin" });
       const fake = getFakeDocker();
       const original = await fake.createContainer({ name: "web", Image: "nginx" });
-      await fake.getContainer(original.id).start();
 
-      const res = await callHandler(PUT, buildRequest({ method: "PUT", body: validBody }), params(original.id));
-
-      expect(res.status).toBe(200);
-      const containers = getFakeDocker().getContainers();
-      expect(containers).toHaveLength(1);
-      expect(containers[0].state).toBe("running");
-    });
-
-    it("when the container is stopped, recreates it and leaves it stopped", async () => {
-      await loginAs(ctx.get(), { role: "admin" });
-      const fake = getFakeDocker();
-      const original = await fake.createContainer({ name: "db", Image: "postgres" });
-
-      const res = await callHandler(PUT, buildRequest({ method: "PUT", body: validBody }), params(original.id));
+      const res = await callHandler<{ id: string }>(
+        PUT,
+        buildRequest({ method: "PUT", body: validBody }),
+        params(original.id)
+      );
 
       expect(res.status).toBe(200);
+      expect(res.body.id).toBeDefined();
+      expect(res.body.id).not.toBe(original.id);
       const containers = getFakeDocker().getContainers();
       expect(containers).toHaveLength(1);
-      expect(containers[0].state).toBe("created");
+      expect(containers[0].name).toBe("updated");
     });
   });
 

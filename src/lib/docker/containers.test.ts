@@ -74,6 +74,8 @@ function buildDetail(overrides: Partial<ContainerDetail> = {}): ContainerDetail 
     entrypoint: [],
     labels: {},
     resources: {},
+    tty: false,
+    stdin: false,
     ...overrides,
   };
 }
@@ -168,6 +170,8 @@ describe("inspectContainer", () => {
         Cmd: ["nginx", "-g", "daemon off;"],
         Entrypoint: ["/docker-entrypoint.sh"],
         Labels: { app: "web" },
+        Tty: true,
+        OpenStdin: true,
       },
       Mounts: [
         { Source: "/host/path", Destination: "/container/path", Mode: "rw", RW: true },
@@ -201,6 +205,8 @@ describe("inspectContainer", () => {
       entrypoint: ["/docker-entrypoint.sh"],
       labels: { app: "web" },
       resources: { cpuLimit: 1, memoryLimit: 536870912 },
+      tty: true,
+      stdin: true,
     });
   });
 
@@ -233,6 +239,8 @@ describe("inspectContainer", () => {
       entrypoint: [],
       labels: {},
       resources: { cpuLimit: undefined, memoryLimit: undefined },
+      tty: false,
+      stdin: false,
     });
   });
 });
@@ -424,17 +432,46 @@ describe("containerDetailToCreateInput", () => {
     expect(input.restartPolicy).toBeUndefined();
   });
 
-  it("drops fields the edit form does not surface (entrypoint, labels, networkMode)", () => {
+  it("preserves labels, networkMode, tty, and stdin so a recreate keeps them", () => {
     const input = containerDetailToCreateInput(
       buildDetail({
-        entrypoint: ["/docker-entrypoint.sh"],
         labels: { app: "web" },
-        networkMode: "bridge",
+        networkMode: "host",
+        tty: true,
+        stdin: true,
       })
     );
-    expect(input).not.toHaveProperty("entrypoint");
-    expect(input.labels).toBeUndefined();
+    expect(input.labels).toEqual({ app: "web" });
+    expect(input.networkMode).toBe("host");
+    expect(input.tty).toBe(true);
+    expect(input.stdin).toBe(true);
+  });
+
+  it("omits networkMode when the container uses the default network", () => {
+    const input = containerDetailToCreateInput(
+      buildDetail({ networkMode: "default" })
+    );
     expect(input.networkMode).toBeUndefined();
+  });
+
+  it("omits tty and stdin when they are false (createContainer's default)", () => {
+    const input = containerDetailToCreateInput(
+      buildDetail({ tty: false, stdin: false })
+    );
+    expect(input.tty).toBeUndefined();
+    expect(input.stdin).toBeUndefined();
+  });
+
+  it("omits labels when none are set", () => {
+    const input = containerDetailToCreateInput(buildDetail({ labels: {} }));
+    expect(input.labels).toBeUndefined();
+  });
+
+  it("entrypoint stays absent because CreateContainerInput does not model it", () => {
+    const input = containerDetailToCreateInput(
+      buildDetail({ entrypoint: ["/docker-entrypoint.sh"] })
+    );
+    expect(input).not.toHaveProperty("entrypoint");
   });
 });
 

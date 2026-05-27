@@ -32,6 +32,8 @@ export interface ContainerDetail extends ContainerSummary {
   entrypoint: string[];
   labels: Record<string, string>;
   resources: { cpuLimit?: number; memoryLimit?: number };
+  tty: boolean;
+  stdin: boolean;
 }
 
 export interface CreateContainerInput {

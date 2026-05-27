@@ -15,9 +15,10 @@ import type {
 } from "./types";
 
 /** Extract the editable spec from an inspected container, ready to feed back
- *  into createContainer. Mirrors the field set the edit form handles today;
- *  labels, entrypoint, networkMode, tty, and stdin are intentionally dropped
- *  because the form does not surface them. */
+ *  into createContainer. Preserves every field CreateContainerInput supports
+ *  so a recreate does not silently drop labels, network mode, tty, or stdin.
+ *  Only `entrypoint` is still absent here, because CreateContainerInput does
+ *  not yet model it. */
 export function containerDetailToCreateInput(
   detail: ContainerDetail
 ): CreateContainerInput {
@@ -39,11 +40,17 @@ export function containerDetailToCreateInput(
       maximumRetryCount: detail.restartPolicy.maximumRetryCount,
     };
   }
+  if (detail.networkMode && detail.networkMode !== "default") {
+    input.networkMode = detail.networkMode;
+  }
   if (detail.hostname) input.hostname = detail.hostname;
   if (detail.cmd.length > 0) input.cmd = detail.cmd;
+  if (Object.keys(detail.labels).length > 0) input.labels = detail.labels;
   if (detail.resources.cpuLimit != null || detail.resources.memoryLimit != null) {
     input.resources = { ...detail.resources };
   }
+  if (detail.tty) input.tty = true;
+  if (detail.stdin) input.stdin = true;
   return input;
 }
 import type Dockerode from "dockerode";
@@ -154,6 +161,8 @@ export async function inspectContainer(
       cpuLimit: nanoCpus > 0 ? nanoCpus / 1e9 : undefined,
       memoryLimit: memoryBytes > 0 ? memoryBytes : undefined,
     },
+    tty: info.Config.Tty ?? false,
+    stdin: info.Config.OpenStdin ?? false,
   };
 }
 

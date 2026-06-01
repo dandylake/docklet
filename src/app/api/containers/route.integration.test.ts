@@ -101,15 +101,16 @@ describe("/api/containers (collection)", () => {
       expect(fake.getContainers()[0].state).toBe("created");
     });
 
-    it("when image is missing from the body, returns 500 (zod .parse throws)", async () => {
+    it("when image is missing from the body — returns 400 with the validation error", async () => {
       await loginAs(ctx.get(), { role: "admin" });
 
-      const res = await callHandler(
+      const res = await callHandler<{ error: string }>(
         POST,
         buildRequest({ method: "POST", body: { name: "bad" } })
       );
 
-      expect(res.status).toBe(500);
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/image/i);
     });
   });
 });

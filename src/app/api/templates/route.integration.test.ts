@@ -49,16 +49,16 @@ describe("/api/templates (collection)", () => {
       expect(JSON.parse(res.body.config)).toEqual({ image: "alpine" });
     });
 
-    it("when name is empty, returns 500 (zod parse error bubbles)", async () => {
+    it("when name is empty — returns 400 with the validation error", async () => {
       await loginAs(ctx.get(), { role: "user" });
 
-      const res = await callHandler(
+      const res = await callHandler<{ error: string }>(
         POST,
         buildRequest({ method: "POST", body: { name: "", config: {} } })
       );
 
-      // The route uses .parse() which throws — handled by handleApiError as 500.
-      expect(res.status).toBe(500);
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/name/i);
     });
 
     it("when not logged in, returns 401", async () => {

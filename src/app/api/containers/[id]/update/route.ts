@@ -1,6 +1,6 @@
-import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod/v4";
-import { requireSelfContainerAccess, handleApiError } from "@/lib/auth/middleware";
+import { jsonRoute } from "@/lib/api/route";
+import { requireSelfContainerAccess } from "@/lib/auth/middleware";
 import { recreateContainer } from "@/lib/docker/containers";
 
 const updateContainerSchema = z.object({
@@ -45,20 +45,11 @@ const updateContainerSchema = z.object({
   stdin: z.boolean().optional(),
 });
 
-export async function PUT(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  try {
-    const { id } = await params;
-    await requireSelfContainerAccess(id);
-    const body = await request.json();
-    const input = updateContainerSchema.parse(body);
-
-    const result = await recreateContainer(id, input);
-
-    return NextResponse.json(result);
-  } catch (error) {
-    return handleApiError(error);
-  }
-}
+export const PUT = jsonRoute<
+  { id: string },
+  z.infer<typeof updateContainerSchema>
+>({
+  auth: ({ params }) => requireSelfContainerAccess(params.id),
+  body: updateContainerSchema,
+  handler: ({ params, body }) => recreateContainer(params.id, body),
+});

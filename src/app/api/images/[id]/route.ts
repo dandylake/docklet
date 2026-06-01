@@ -1,18 +1,17 @@
-import { NextRequest, NextResponse } from "next/server";
-import { requireRole, handleApiError } from "@/lib/auth/middleware";
+import { z } from "zod/v4";
+import { jsonRoute } from "@/lib/api/route";
 import { removeImage } from "@/lib/docker/images";
 
-export async function DELETE(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  try {
-    await requireRole("admin");
-    const { id } = await params;
-    const force = request.nextUrl.searchParams.get("force") === "true";
-    await removeImage(id, force);
-    return NextResponse.json({ success: true });
-  } catch (error) {
-    return handleApiError(error);
-  }
-}
+export const DELETE = jsonRoute<{ id: string }, undefined, { force: boolean }>({
+  auth: "admin",
+  query: z.object({
+    force: z
+      .string()
+      .optional()
+      .transform((v) => v === "true"),
+  }),
+  handler: async ({ params, query }) => {
+    await removeImage(params.id, query.force);
+    return { success: true };
+  },
+});

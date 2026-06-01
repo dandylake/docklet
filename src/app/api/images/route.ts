@@ -1,13 +1,7 @@
-import { NextResponse } from "next/server";
-import { requireAuth, handleApiError } from "@/lib/auth/middleware";
+import { jsonRoute } from "@/lib/api/route";
 import { listImages } from "@/lib/docker/images";
 
-export async function GET() {
-  try {
-    await requireAuth();
-    const images = await listImages();
-    return NextResponse.json(images);
-  } catch (error) {
-    return handleApiError(error);
-  }
-}
+export const GET = jsonRoute({
+  auth: "authed",
+  handler: () => listImages(),
+});

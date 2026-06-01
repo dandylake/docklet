@@ -1,7 +1,10 @@
-import { NextResponse } from "next/server";
+import { jsonRoute } from "@/lib/api/route";
 import { clearSessionCookie } from "@/lib/auth/session";
 
-export async function POST() {
-  await clearSessionCookie();
-  return NextResponse.json({ success: true });
-}
+export const POST = jsonRoute({
+  auth: "none",
+  handler: async () => {
+    await clearSessionCookie();
+    return { success: true };
+  },
+});

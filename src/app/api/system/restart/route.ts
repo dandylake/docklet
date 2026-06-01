@@ -1,16 +1,11 @@
-import { NextResponse } from "next/server";
-import { requireRole, handleApiError } from "@/lib/auth/middleware";
+import { jsonRoute } from "@/lib/api/route";
 
-export async function POST() {
-  try {
-    await requireRole("admin");
-
+export const POST = jsonRoute({
+  auth: "admin",
+  handler: async () => {
     // Give the response time to flush before the process exits.
     // Docker's restart policy will bring the container back up.
     setTimeout(() => process.exit(0), 500);
-
-    return NextResponse.json({ success: true, message: "Restarting..." });
-  } catch (error) {
-    return handleApiError(error);
-  }
-}
+    return { success: true, message: "Restarting..." };
+  },
+});

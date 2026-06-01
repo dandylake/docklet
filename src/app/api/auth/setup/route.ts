@@ -1,11 +1,13 @@
-import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod/v4";
+import { apiRoute } from "@/lib/api/route";
+import { AppError } from "@/lib/errors";
 import { getDb } from "@/lib/db";
 import { users } from "@/lib/db/schema";
 import { hashPassword } from "@/lib/auth/password";
 import { createSession, setSessionCookie } from "@/lib/auth/session";
 import { setSetting, isSetupCompleted, ensureJwtSecret } from "@/lib/config";
-import { checkRateLimit, getClientIp, RateLimitError } from "@/lib/rate-limit";
+import { checkRateLimit, getClientIp } from "@/lib/rate-limit";
+import { NextResponse } from "next/server";
 
 const setupSchema = z.object({
   username: z
@@ -23,38 +25,29 @@ const setupSchema = z.object({
   { message: "Passwords do not match" }
 );
 
-export async function POST(request: NextRequest) {
-  // Prevent re-running setup
-  if (isSetupCompleted()) {
-    return NextResponse.json(
-      { error: "Setup already completed" },
-      { status: 400 }
-    );
-  }
-
-  try {
-    checkRateLimit(`setup:${getClientIp(request)}`, 3, 60 * 60 * 1000);
-    const body = await request.json();
-    const result = setupSchema.safeParse(body);
-
-    if (!result.success) {
-      return NextResponse.json(
-        { error: result.error.issues[0].message },
-        { status: 400 }
-      );
+export const POST = apiRoute({
+  auth: "none",
+  handler: async ({ request }) => {
+    if (isSetupCompleted()) {
+      throw new AppError(400, "Setup already completed");
     }
 
-    const { username, password } = result.data;
+    checkRateLimit(`setup:${getClientIp(request)}`, 3, 60 * 60 * 1000);
 
-    // Ensure JWT secret exists
+    const raw = await request.json().catch(() => undefined);
+    const parsed = setupSchema.safeParse(raw);
+    if (!parsed.success) {
+      throw new AppError(400, parsed.error.issues[0]?.message ?? "Invalid input");
+    }
+
+    const { username, password } = parsed.data;
+
     ensureJwtSecret();
 
-    // Create admin user
-    const db = getDb();
     const passwordHash = await hashPassword(password);
     const now = new Date();
 
-    const inserted = db
+    const inserted = getDb()
       .insert(users)
       .values({
         username,
@@ -68,19 +61,12 @@ export async function POST(request: NextRequest) {
 
     setSetting("app_name", "Docklet");
 
-    // Create session
     const token = await createSession(inserted);
     await setSessionCookie(token);
 
-    return NextResponse.json({ success: true, user: { id: inserted.id, username: inserted.username, role: inserted.role } });
-  } catch (error) {
-    if (error instanceof RateLimitError) {
-      return NextResponse.json({ error: error.message }, { status: 429 });
-    }
-    console.error("Setup error:", error);
-    return NextResponse.json(
-      { error: "Failed to complete setup" },
-      { status: 500 }
-    );
-  }
-}
+    return NextResponse.json({
+      success: true,
+      user: { id: inserted.id, username: inserted.username, role: inserted.role },
+    });
+  },
+});

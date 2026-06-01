@@ -1,6 +1,5 @@
-import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod/v4";
-import { requireRole, handleApiError } from "@/lib/auth/middleware";
+import { jsonRoute } from "@/lib/api/route";
 import { updateUser, deleteUser } from "@/lib/users/service";
 import { AppError } from "@/lib/errors";
 
@@ -24,40 +23,16 @@ function parseId(id: string): number {
   return n;
 }
 
-export async function PATCH(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  try {
-    await requireRole("admin");
-    const { id } = await params;
-    const userId = parseId(id);
-    const body = await request.json();
-    const parsed = patchSchema.safeParse(body);
-    if (!parsed.success) {
-      return NextResponse.json(
-        { error: parsed.error.issues[0].message },
-        { status: 400 }
-      );
-    }
-    const user = await updateUser(userId, parsed.data);
-    return NextResponse.json(user);
-  } catch (error) {
-    return handleApiError(error);
-  }
-}
+export const PATCH = jsonRoute<{ id: string }, z.infer<typeof patchSchema>>({
+  auth: "admin",
+  body: patchSchema,
+  handler: ({ params, body }) => updateUser(parseId(params.id), body),
+});
 
-export async function DELETE(
-  _request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  try {
-    const session = await requireRole("admin");
-    const { id } = await params;
-    const userId = parseId(id);
-    await deleteUser(userId, session.userId);
-    return NextResponse.json({ ok: true });
-  } catch (error) {
-    return handleApiError(error);
-  }
-}
+export const DELETE = jsonRoute<{ id: string }>({
+  auth: "admin",
+  handler: async ({ params, session }) => {
+    await deleteUser(parseId(params.id), session!.userId);
+    return { ok: true };
+  },
+});

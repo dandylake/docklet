@@ -1,7 +1,11 @@
-import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod/v4";
-import { requireAuth, handleApiError } from "@/lib/auth/middleware";
-import { listContainers, createContainer, startContainer, isSelfContainer } from "@/lib/docker/containers";
+import { jsonRoute } from "@/lib/api/route";
+import {
+  listContainers,
+  createContainer,
+  startContainer,
+  isSelfContainer,
+} from "@/lib/docker/containers";
 
 const createContainerSchema = z.object({
   name: z.string().min(1),
@@ -46,32 +50,26 @@ const createContainerSchema = z.object({
   autoStart: z.boolean().optional(),
 });
 
-export async function GET() {
-  try {
-    const session = await requireAuth();
+export const GET = jsonRoute({
+  auth: "authed",
+  handler: async ({ session }) => {
     const containers = await listContainers();
-    const visible =
-      session.role === "admin"
-        ? containers
-        : containers.filter((c) => !isSelfContainer(c.id));
-    return NextResponse.json(visible);
-  } catch (error) {
-    return handleApiError(error);
-  }
-}
+    return session!.role === "admin"
+      ? containers
+      : containers.filter((c) => !isSelfContainer(c.id));
+  },
+});
 
-export async function POST(request: NextRequest) {
-  try {
-    await requireAuth();
-    const body = await request.json();
-    const input = createContainerSchema.parse(body);
-    const { autoStart, ...containerInput } = input;
-    const result = await createContainer(containerInput);
+export const POST = jsonRoute({
+  auth: "authed",
+  body: createContainerSchema,
+  status: 201,
+  handler: async ({ body }) => {
+    const { autoStart, ...input } = body;
+    const result = await createContainer(input);
     if (autoStart !== false) {
       await startContainer(result.id);
     }
-    return NextResponse.json(result, { status: 201 });
-  } catch (error) {
-    return handleApiError(error);
-  }
-}
+    return result;
+  },
+});

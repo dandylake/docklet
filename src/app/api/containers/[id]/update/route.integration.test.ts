@@ -52,20 +52,19 @@ describe("PUT /api/containers/[id]/update", () => {
   });
 
   describe("validation", () => {
-    // The route uses zod .parse() (not .safeParse()), so ZodError is unhandled and returns 500.
-    // This matches the documented behavior on the collection POST route.
-    it("when the request body is missing the required name field, returns 500", async () => {
+    it("when the request body is missing the required name field — returns 400 with the validation error", async () => {
       await loginAs(ctx.get(), { role: "admin" });
       const fake = getFakeDocker();
       const c = await fake.createContainer({ name: "x", Image: "alpine" });
 
-      const res = await callHandler(
+      const res = await callHandler<{ error: string }>(
         PUT,
         buildRequest({ method: "PUT", body: { image: "nginx:latest" } }),
         params(c.id)
       );
 
-      expect(res.status).toBe(500);
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/name/i);
     });
   });
 

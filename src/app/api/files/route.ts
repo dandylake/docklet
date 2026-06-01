@@ -1,6 +1,5 @@
-import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod/v4";
-import { requireAuth, requireRole, handleApiError } from "@/lib/auth/middleware";
+import { jsonRoute } from "@/lib/api/route";
 import {
   listDir,
   readTextFile,
@@ -23,59 +22,47 @@ const renameSchema = z.object({
   newPath: z.string(),
 });
 
-export async function GET(request: NextRequest) {
-  try {
-    await requireAuth();
-    const relPath = request.nextUrl.searchParams.get("path") ?? "";
-    const entry = await statPath(relPath);
+const pathQuery = z.object({
+  path: z.string().optional().transform((v) => v ?? ""),
+});
+
+export const GET = jsonRoute<Record<string, string>, undefined, z.infer<typeof pathQuery>>({
+  auth: "authed",
+  query: pathQuery,
+  handler: async ({ query }) => {
+    const entry = await statPath(query.path);
     if (entry.isDir) {
-      const entries = await listDir(relPath);
-      return NextResponse.json({ entry, entries });
+      const entries = await listDir(query.path);
+      return { entry, entries };
     }
-    const { content, encoding } = await readTextFile(relPath);
-    return NextResponse.json({ entry, content, encoding });
-  } catch (error) {
-    return handleApiError(error);
-  }
-}
+    const { content, encoding } = await readTextFile(query.path);
+    return { entry, content, encoding };
+  },
+});
 
-export async function POST(request: NextRequest) {
-  try {
-    await requireRole("admin", "mod");
-    const body = await request.json();
-    const parsed = writeSchema.safeParse(body);
-    if (!parsed.success) {
-      return NextResponse.json({ error: parsed.error.issues[0].message }, { status: 400 });
-    }
-    const entry = await writeTextFile(parsed.data.path, parsed.data.content);
-    return NextResponse.json({ entry });
-  } catch (error) {
-    return handleApiError(error);
-  }
-}
+export const POST = jsonRoute({
+  auth: ["admin", "mod"],
+  body: writeSchema,
+  handler: async ({ body }) => {
+    const entry = await writeTextFile(body.path, body.content);
+    return { entry };
+  },
+});
 
-export async function PATCH(request: NextRequest) {
-  try {
-    await requireRole("admin", "mod");
-    const body = await request.json();
-    const parsed = renameSchema.safeParse(body);
-    if (!parsed.success) {
-      return NextResponse.json({ error: parsed.error.issues[0].message }, { status: 400 });
-    }
-    const entry = await rename(parsed.data.path, parsed.data.newPath);
-    return NextResponse.json({ entry });
-  } catch (error) {
-    return handleApiError(error);
-  }
-}
+export const PATCH = jsonRoute({
+  auth: ["admin", "mod"],
+  body: renameSchema,
+  handler: async ({ body }) => {
+    const entry = await rename(body.path, body.newPath);
+    return { entry };
+  },
+});
 
-export async function DELETE(request: NextRequest) {
-  try {
-    await requireRole("admin", "mod");
-    const relPath = request.nextUrl.searchParams.get("path") ?? "";
-    await remove(relPath);
-    return NextResponse.json({ ok: true });
-  } catch (error) {
-    return handleApiError(error);
-  }
-}
+export const DELETE = jsonRoute<Record<string, string>, undefined, z.infer<typeof pathQuery>>({
+  auth: ["admin", "mod"],
+  query: pathQuery,
+  handler: async ({ query }) => {
+    await remove(query.path);
+    return { ok: true };
+  },
+});

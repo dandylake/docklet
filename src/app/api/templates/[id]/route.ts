@@ -1,79 +1,62 @@
-import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod/v4";
 import { eq } from "drizzle-orm";
-import { requireAuth, handleApiError } from "@/lib/auth/middleware";
+import { jsonRoute } from "@/lib/api/route";
 import { getDb } from "@/lib/db";
 import { containerTemplates } from "@/lib/db/schema";
+import { AppError } from "@/lib/errors";
 
 const updateTemplateSchema = z.object({
   name: z.string().min(1).optional(),
   config: z.object({}).passthrough().optional(),
 });
 
-export async function GET(
-  _request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  try {
-    await requireAuth();
-    const { id } = await params;
-    const db = getDb();
-    const template = db
+function templateId(raw: string): number {
+  const n = parseInt(raw, 10);
+  if (!Number.isInteger(n) || n <= 0) {
+    throw new AppError(400, "Invalid template id");
+  }
+  return n;
+}
+
+export const GET = jsonRoute<{ id: string }>({
+  auth: "authed",
+  handler: ({ params }) => {
+    const template = getDb()
       .select()
       .from(containerTemplates)
-      .where(eq(containerTemplates.id, parseInt(id, 10)))
+      .where(eq(containerTemplates.id, templateId(params.id)))
       .get();
-    if (!template) {
-      return NextResponse.json({ error: "Template not found" }, { status: 404 });
-    }
-    return NextResponse.json(template);
-  } catch (error) {
-    return handleApiError(error);
-  }
-}
+    if (!template) throw new AppError(404, "Template not found");
+    return template;
+  },
+});
 
-export async function PUT(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  try {
-    await requireAuth();
-    const { id } = await params;
-    const body = await request.json();
-    const input = updateTemplateSchema.parse(body);
-    const db = getDb();
+export const PUT = jsonRoute<{ id: string }, z.infer<typeof updateTemplateSchema>>({
+  auth: "authed",
+  body: updateTemplateSchema,
+  handler: ({ params, body }) => {
     const updates: Record<string, unknown> = { updatedAt: new Date() };
-    if (input.name) updates.name = input.name;
-    if (input.config) updates.config = JSON.stringify(input.config);
+    if (body.name) updates.name = body.name;
+    if (body.config) updates.config = JSON.stringify(body.config);
 
-    const template = db
+    const template = getDb()
       .update(containerTemplates)
       .set(updates)
-      .where(eq(containerTemplates.id, parseInt(id, 10)))
+      .where(eq(containerTemplates.id, templateId(params.id)))
       .returning()
       .get();
-    if (!template) {
-      return NextResponse.json({ error: "Template not found" }, { status: 404 });
-    }
-    return NextResponse.json(template);
-  } catch (error) {
-    return handleApiError(error);
-  }
-}
+    if (!template) throw new AppError(404, "Template not found");
+    return template;
+  },
+});
 
-export async function DELETE(
-  _request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  try {
-    await requireAuth();
-    const { id } = await params;
-    const db = getDb();
-    db.delete(containerTemplates)
-      .where(eq(containerTemplates.id, parseInt(id, 10)))
+export const DELETE = jsonRoute<{ id: string }>({
+  auth: "authed",
+  handler: ({ params }) => {
+    getDb()
+      .delete(containerTemplates)
+      .where(eq(containerTemplates.id, templateId(params.id)))
       .run();
-    return NextResponse.json({ success: true });
-  } catch (error) {
-    return handleApiError(error);
-  }
-}
+    return { success: true };
+  },
+});

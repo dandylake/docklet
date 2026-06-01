@@ -1,64 +1,47 @@
-import { NextRequest, NextResponse } from "next/server";
-import { requireRole, handleApiError } from "@/lib/auth/middleware";
-import { getAllSettings, setSetting } from "@/lib/config";
-import { writeFileSync, unlinkSync, existsSync } from "fs";
+import { z } from "zod/v4";
 import { join } from "path";
+import { writeFileSync, unlinkSync, existsSync } from "fs";
+import { jsonRoute, multipartRoute } from "@/lib/api/route";
+import { AppError } from "@/lib/errors";
+import { getAllSettings, setSetting } from "@/lib/config";
 import { getDataDir } from "@/lib/db";
 import { ensureSelfSignedCert } from "@/lib/certs/generate";
 
 // Hidden settings that should never be exposed to the client
 const HIDDEN_KEYS = ["jwt_secret"];
 
-export async function GET() {
-  try {
-    await requireRole("admin");
+const settingsPutSchema = z.record(z.string(), z.string());
+
+export const GET = jsonRoute({
+  auth: "admin",
+  handler: () => {
     const all = getAllSettings();
-    for (const key of HIDDEN_KEYS) {
-      delete all[key];
-    }
-    return NextResponse.json(all);
-  } catch (error) {
-    return handleApiError(error);
-  }
-}
+    for (const key of HIDDEN_KEYS) delete all[key];
+    return all;
+  },
+});
 
-export async function PUT(request: NextRequest) {
-  try {
-    await requireRole("admin");
-    const body = await request.json();
-
-    if (typeof body !== "object" || body === null) {
-      return NextResponse.json(
-        { error: "Invalid request body" },
-        { status: 400 }
-      );
-    }
-
+export const PUT = jsonRoute<Record<string, string>, z.infer<typeof settingsPutSchema>>({
+  auth: "admin",
+  body: settingsPutSchema,
+  handler: ({ body }) => {
     for (const [key, value] of Object.entries(body)) {
       if (HIDDEN_KEYS.includes(key)) continue;
-      if (typeof value !== "string") continue;
       setSetting(key, value);
     }
-
-    return NextResponse.json({ success: true });
-  } catch (error) {
-    return handleApiError(error);
-  }
-}
+    return { success: true };
+  },
+});
 
 // TLS certificate upload
-export async function POST(request: NextRequest) {
-  try {
-    await requireRole("admin");
-    const formData = await request.formData();
+export const POST = multipartRoute({
+  auth: "admin",
+  handler: async ({ formData }) => {
     const cert = formData.get("cert") as File | null;
     const key = formData.get("key") as File | null;
 
     if (!cert || !key) {
-      return NextResponse.json(
-        { error: "Both cert and key files are required" },
-        { status: 400 }
-      );
+      throw new AppError(400, "Both cert and key files are required");
     }
 
     const certsDir = join(getDataDir(), "certs");
@@ -71,19 +54,17 @@ export async function POST(request: NextRequest) {
     setSetting("tls_enabled", "true");
     setSetting("tls_cert_type", "custom");
 
-    return NextResponse.json({
+    return {
       success: true,
       message: "TLS certificates uploaded. Restart Docklet to apply.",
-    });
-  } catch (error) {
-    return handleApiError(error);
-  }
-}
+    };
+  },
+});
 
 // Revert to self-signed certificate
-export async function DELETE() {
-  try {
-    await requireRole("admin");
+export const DELETE = jsonRoute({
+  auth: "admin",
+  handler: async () => {
     const certsDir = join(getDataDir(), "certs");
 
     for (const file of ["cert.pem", "key.pem"]) {
@@ -95,11 +76,9 @@ export async function DELETE() {
 
     await ensureSelfSignedCert(certsDir);
 
-    return NextResponse.json({
+    return {
       success: true,
       message: "Self-signed certificate regenerated. Restart Docklet to apply.",
-    });
-  } catch (error) {
-    return handleApiError(error);
-  }
-}
+    };
+  },
+});
